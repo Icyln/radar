@@ -83,3 +83,16 @@ FastAPI is not called anywhere in this path.
 8. Telegram link tokens are random, hashed at rest, expiring, and single-use.
 9. Every user-owned API resource is ownership checked on the backend.
 10. Workers require no persistent local filesystem state.
+
+
+## Phase 4 web session boundary
+
+The browser does not persist the FastAPI JWT in localStorage. Authentication requests are sent to same-origin Next.js Route Handlers under `/api/radar/*`. After FastAPI returns a JWT, Next.js stores it in an HttpOnly, SameSite=Lax cookie. Server Components and Route Handlers read that cookie server-side and add the Bearer token when calling FastAPI.
+
+```text
+Browser -> Next.js (Vercel) -> FastAPI (Render) -> PostgreSQL (Supabase)
+             |
+             +-- HttpOnly session cookie
+```
+
+This keeps the existing Phase 3 JWT contract while avoiding exposure of the access token to ordinary browser JavaScript. The monitoring critical path remains unchanged and bypasses Next.js and Render.

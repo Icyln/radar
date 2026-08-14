@@ -1,4 +1,4 @@
-# Deployment — Phase 0 through Phase 3
+# Deployment — Phase 0 through Phase 4
 
 Phase 3 provides the deployable management API. Automated scheduled monitoring remains Phase 5.
 
@@ -79,10 +79,13 @@ frontend
 Set:
 
 ```text
-NEXT_PUBLIC_API_URL=https://<render-service>
+RADAR_API_URL=https://<render-service>
+RADAR_SESSION_MAX_AGE_SECONDS=3600
 ```
 
-The frontend remains a Phase-0 foundation/status surface until Phase 4 implements authentication and management screens.
+The Phase 4 frontend uses a same-origin Next.js Route Handler proxy. The FastAPI JWT is held in an HttpOnly cookie rather than browser localStorage. `NEXT_PUBLIC_API_URL` is retained only as a compatibility fallback.
+
+After Vercel deployment, update Render `FRONTEND_URL` to the production Vercel origin. See `docs/phase4-setup-deployment.md` for the complete flow.
 
 ## Monitoring deployment boundary
 

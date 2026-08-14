@@ -1,6 +1,6 @@
 # Radar
 
-Radar is a small, dependable job-intelligence and early-warning system. This repository now contains **Phase 0 through Phase 3** of the master engineering specification.
+Radar is a small, dependable job-intelligence and early-warning system. This repository now contains **Phase 0 through Phase 4** of the master engineering specification.
 
 ## No-Docker local development
 
@@ -10,6 +10,7 @@ Start here:
 
 - [`docs/setup-no-docker.md`](docs/setup-no-docker.md) — original Phase 0/1 local setup and real Cloudflare Greenhouse smoke test
 - [`docs/phase2-phase3-setup.md`](docs/phase2-phase3-setup.md) — detailed Phase 2/3 upgrade, API, matching, authentication, and Telegram-linking guide
+- [`docs/phase4-setup-deployment.md`](docs/phase4-setup-deployment.md) — dashboard setup, local acceptance testing, and Vercel deployment
 - [`docs/postgresql-manual-setup.sql.example`](docs/postgresql-manual-setup.sql.example) — local role/database creation example
 
 ## Implemented phases
@@ -68,7 +69,22 @@ Start here:
 - Telegram Save/Ignore callback handling
 - `/health` and `/ready`
 
-Phase 4 (web dashboard UI) and Phase 5 (scheduled GitHub Actions monitoring workflows) remain intentionally separate.
+### Phase 4 — Web dashboard
+
+- register/login UI
+- HttpOnly cookie-backed Next.js session proxy
+- protected responsive dashboard shell
+- dashboard summary/recent matches
+- job profile management
+- matched/saved/ignored job views
+- active/unknown/closed lifecycle filters
+- save/ignore actions
+- monitored company status and admin controls
+- account settings
+- Telegram connection management
+- loading/error/empty states
+
+Phase 5 (scheduled GitHub Actions monitoring workflows) remains intentionally separate.
 
 ## Runtime architecture
 
@@ -108,7 +124,7 @@ Backend/monitoring:
 - PostgreSQL installed directly on the OS
 - internet access to configured ATS providers and Telegram
 
-Frontend foundation:
+Frontend dashboard:
 
 - Node.js supported by Next.js 15
 - npm

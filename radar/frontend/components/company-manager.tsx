@@ -1,0 +1,44 @@
+"use client";
+
+import { FormEvent, useState } from "react";
+import { Badge } from "@/components/badge";
+import { clientRequest } from "@/lib/client-api";
+import { formatDateTime, humanize } from "@/lib/format";
+import type { ATSProvider, Company, CompanyPayload, MonitoringPriority } from "@/types/api";
+
+const providers: ATSProvider[] = ["GREENHOUSE", "LEVER", "ASHBY"];
+const priorities: MonitoringPriority[] = ["HIGH", "NORMAL", "LOW"];
+const blank: CompanyPayload = { name: "", website: null, career_url: "", ats_provider: "GREENHOUSE", ats_identifier: "", monitoring_priority: "NORMAL", active: true };
+
+export function CompanyManager({ initialCompanies, isAdmin }: { initialCompanies: Company[]; isAdmin: boolean }) {
+  const [companies, setCompanies] = useState(initialCompanies);
+  const [form, setForm] = useState<CompanyPayload>(blank);
+  const [showForm, setShowForm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setError(null);
+    try {
+      const created = await clientRequest<Company>("companies", { method: "POST", body: JSON.stringify(form) });
+      setCompanies((current) => [...current, created].sort((a,b) => a.name.localeCompare(b.name)));
+      setForm(blank); setShowForm(false);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not create company"); }
+    finally { setBusy(false); }
+  }
+
+  async function toggle(company: Company) {
+    setError(null);
+    try {
+      const updated = await clientRequest<Company>(`companies/${company.id}`, { method: "PATCH", body: JSON.stringify({ active: !company.active }) });
+      setCompanies((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not update company"); }
+  }
+
+  return <div className="space-y-5">
+    {isAdmin ? <div className="flex justify-end"><button className="button-primary" onClick={() => setShowForm((v) => !v)}>{showForm ? "Close form" : "Add company"}</button></div> : null}
+    {showForm ? <form onSubmit={submit} className="panel p-5 sm:p-6"><h2 className="font-semibold text-zinc-100">Add ATS company</h2><div className="mt-5 grid gap-4 md:grid-cols-2"><label className="field-label">Company name<input className="input mt-2" required value={form.name} onChange={(e) => setForm({...form, name:e.target.value})}/></label><label className="field-label">ATS identifier<input className="input mt-2" required value={form.ats_identifier} onChange={(e) => setForm({...form, ats_identifier:e.target.value})}/></label><label className="field-label">Website<input className="input mt-2" type="url" value={form.website ?? ""} onChange={(e) => setForm({...form, website:e.target.value || null})}/></label><label className="field-label">Career URL<input className="input mt-2" type="url" required value={form.career_url} onChange={(e) => setForm({...form, career_url:e.target.value})}/></label><label className="field-label">ATS provider<select className="input mt-2" value={form.ats_provider} onChange={(e) => setForm({...form, ats_provider:e.target.value as ATSProvider})}>{providers.map((p)=><option key={p}>{p}</option>)}</select></label><label className="field-label">Priority<select className="input mt-2" value={form.monitoring_priority} onChange={(e) => setForm({...form, monitoring_priority:e.target.value as MonitoringPriority})}>{priorities.map((p)=><option key={p}>{p}</option>)}</select></label></div><label className="mt-4 flex items-center gap-2 text-sm text-zinc-300"><input type="checkbox" className="accent-emerald-400" checked={form.active} onChange={(e)=>setForm({...form,active:e.target.checked})}/>Active monitoring</label>{error ? <p className="mt-4 text-sm text-rose-400">{error}</p> : null}<button className="button-primary mt-5" disabled={busy}>{busy ? "Adding…" : "Add company"}</button></form> : null}
+    {error && !showForm ? <p className="text-sm text-rose-400">{error}</p> : null}
+    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/50"><div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead className="border-b border-zinc-800 bg-zinc-900/50 text-xs text-zinc-500"><tr><th className="px-4 py-3 font-medium">Company</th><th className="px-4 py-3 font-medium">Source</th><th className="px-4 py-3 font-medium">Priority</th><th className="px-4 py-3 font-medium">Last success</th><th className="px-4 py-3 font-medium">Health</th>{isAdmin ? <th className="px-4 py-3"></th> : null}</tr></thead><tbody className="divide-y divide-zinc-800/70">{companies.length === 0 ? <tr><td colSpan={isAdmin ? 6 : 5} className="px-4 py-10 text-center text-sm text-zinc-600">No monitored companies configured yet.</td></tr> : companies.map((company)=><tr key={company.id} className="text-zinc-300"><td className="px-4 py-4"><a href={company.career_url} target="_blank" rel="noreferrer" className="font-medium text-zinc-100 hover:text-emerald-300">{company.name}</a><p className="mt-1 text-xs text-zinc-600">{company.ats_identifier}</p></td><td className="px-4 py-4">{humanize(company.ats_provider)}</td><td className="px-4 py-4"><Badge>{humanize(company.monitoring_priority)}</Badge></td><td className="px-4 py-4 whitespace-nowrap text-xs text-zinc-500">{formatDateTime(company.last_successful_check_at)}</td><td className="px-4 py-4"><Badge tone={!company.active ? "neutral" : company.consecutive_failures > 0 ? "warning" : "success"}>{!company.active ? "Paused" : company.consecutive_failures > 0 ? `${company.consecutive_failures} failures` : "Healthy"}</Badge></td>{isAdmin ? <td className="px-4 py-4 text-right"><button className="button-ghost" onClick={()=>toggle(company)}>{company.active ? "Pause" : "Enable"}</button></td> : null}</tr>)}</tbody></table></div></div>
+  </div>;
+}
