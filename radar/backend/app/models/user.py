@@ -19,6 +19,9 @@ class User(TimestampMixin, Base):
     job_profiles = relationship("JobProfile", back_populates="user", cascade="all, delete-orphan")
     job_matches = relationship("JobMatch", back_populates="user", cascade="all, delete-orphan")
     job_states = relationship("UserJobState", back_populates="user", cascade="all, delete-orphan")
+    company_watchlist = relationship(
+        "UserCompanyWatchlist", back_populates="user", cascade="all, delete-orphan"
+    )
     telegram_connection = relationship(
         "TelegramConnection", back_populates="user", cascade="all, delete-orphan", uselist=False
     )

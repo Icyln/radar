@@ -1,4 +1,6 @@
-# Monitoring — Phase 1 through Phase 3
+# Monitoring — Phase 1 through Phase 5
+
+Radar uses one reusable Python monitoring pipeline for manual execution and GitHub Actions. The worker talks directly to PostgreSQL, ATS providers, and Telegram; it never calls Render/FastAPI.
 
 ## Manual execution
 
@@ -23,6 +25,37 @@ python -m app.workers.monitor --priority normal
 python -m app.workers.monitor --priority low
 ```
 
+Source scope:
+
+```bash
+python -m app.workers.monitor --scope all
+python -m app.workers.monitor --scope watchlist
+python -m app.workers.monitor --scope registry
+```
+
+`watchlist` means a source watched by at least one Radar user. `registry` means an active source currently watched by nobody.
+
+## Phase 5 scheduling controls
+
+The same worker supports bounded, due-aware, deterministic selection:
+
+```bash
+python -m app.workers.monitor \
+  --scope registry \
+  --priority normal \
+  --batch-size 50 \
+  --min-age-minutes 55 \
+  --shard-index 0 \
+  --shard-count 4 \
+  --max-concurrency 3
+```
+
+- `--batch-size` caps sources selected in one invocation.
+- `--min-age-minutes` excludes a source until its persisted `last_checked_at` is old enough. Never-checked sources are due first.
+- `--shard-index` / `--shard-count` partition source UUIDs deterministically so later scale-out does not depend on unstable SQL offsets.
+- `--max-concurrency` bounds simultaneous company processing.
+- `--allow-partial-failures` lets a scheduled batch finish successfully when individual sources fail; those failures remain persisted in `crawler_logs` / `monitor_runs`. Fatal worker/database failures still fail the process.
+
 Supported providers:
 
 ```text
@@ -31,58 +64,49 @@ LEVER
 ASHBY
 ```
 
+## Scheduled production workflow
+
+`.github/workflows/scheduled_monitor.yml` runs at minute `07` and `37` each hour. One runner installation handles multiple source tiers to avoid repeating checkout/setup/install overhead.
+
+Default tiers:
+
+```text
+watchlist       batch 50   due after 25 min
+registry HIGH   batch 25   due after 25 min
+registry NORMAL batch 50   due after 55 min
+registry LOW    batch 100  due after 235 min
+```
+
+The workflow uses repository secrets for `DATABASE_URL` and `TELEGRAM_BOT_TOKEN`, validates that the database is remote before monitoring, and uses a workflow concurrency group so scheduled executions do not intentionally overlap at the workflow level.
+
+Per-company PostgreSQL advisory locks remain the final overlap guard if a manual run or another workflow reaches the same source concurrently.
+
+## Persistent monitor runs
+
+Each worker invocation creates a `monitor_runs` row. `crawler_logs.monitor_run_id` links company-level outcomes to the enclosing batch. Useful fields include source scope, priority, shard, batch/due settings, counts, trigger, external GitHub run identifier, status, and errors.
+
 ## Per-company sequence
 
 1. acquire PostgreSQL advisory lock
-2. create `crawler_logs` row
-3. fetch ATS outside a long database transaction
-4. validate provider response
-5. normalize into `NormalizedJob`
-6. insert/update/deduplicate observed jobs
-7. advance lifecycle for jobs absent from the successful snapshot
-8. evaluate new/updated jobs against enabled profiles
-9. create unique `job_matches`
-10. create per-user Telegram notification rows for new matches when appropriate
-11. commit source state and crawler statistics
-12. release company lock
-13. deliver pending notifications outside source-processing transaction
+2. create crawler log linked to the monitor run
+3. fetch ATS outside a long DB transaction
+4. validate and normalize source payload
+5. insert/update/deduplicate jobs
+6. advance lifecycle only after a successful complete snapshot
+7. evaluate new/updated jobs against enabled profiles
+8. enforce profile coverage (`WIDE` or `WATCHLIST`)
+9. create unique JobMatch rows
+10. enqueue eligible Telegram notifications
+11. commit crawler/source state
+12. release advisory lock
+13. deliver pending notifications after company processing
 
-One company failure does not stop unrelated companies.
+## Coverage behavior
 
-## Source-failure safety
+A Wide profile is evaluated against any active job in the source registry. A Watchlist profile is evaluated only when the job's company appears in that user's `user_company_watchlists` rows.
 
-A collector must either return a complete successful snapshot or raise `CollectorError`. A timeout, HTTP error, malformed payload, or parsing error never becomes an empty successful board and therefore cannot increment missing counters or close jobs.
+When a user starts watching a company, Radar backfills active jobs from that company against enabled Watchlist profiles. Historical backfill matches are persisted for the dashboard but are not pushed as a notification burst.
 
-## HTTP policy
+## Phase 6 boundary
 
-The shared HTTP client uses:
-
-- connect timeout
-- read timeout
-- bounded retries
-- bounded exponential backoff
-- retry for network failure, 429, and 5xx
-- no repeated retry for permanent 4xx errors
-
-## Initial synchronization
-
-A company's first successful source snapshot establishes the baseline. Existing jobs are persisted and can be matched for dashboard history, but normal per-user alerts are not sent for the initial board contents.
-
-The legacy Phase-1 single-recipient test path can still be intentionally enabled with `PHASE1_NOTIFY_ON_INITIAL_SYNC=true`.
-
-## Notification outbox
-
-Normal Phase 2/3 notifications use:
-
-```text
-PENDING -> SENDING -> SENT
-                  -> FAILED
-```
-
-Failures are bounded by `TELEGRAM_MAX_ATTEMPTS`.
-
-A `SENDING` row older than `TELEGRAM_SENDING_STALE_MINUTES` becomes claimable again. This prevents a crash from leaving notifications stuck forever. Because Telegram and PostgreSQL cannot participate in one atomic transaction, this is practical at-least-once processing with database guards for effectively-once behavior under normal operation.
-
-## Phase 5 boundary
-
-GitHub Actions schedules are not part of Phase 3. Phase 5 should call the same worker with priority filters and inject secrets through GitHub Actions secrets. It must not wake/call Render to perform monitoring.
+Phase 5 schedules sources already present in `companies`. It does not discover companies absent from the registry. Source candidate discovery, validation, and registry growth belong to Phase 6.

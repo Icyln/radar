@@ -1,6 +1,6 @@
-# Deployment — Phase 0 through Phase 4
+# Deployment — Phase 0 through Phase 5
 
-Phase 3 provides the deployable management API. Automated scheduled monitoring remains Phase 5.
+Phase 3 provides the deployable management API. Phase 5 adds scheduled GitHub Actions workers that operate independently of Render.
 
 ## Supabase PostgreSQL
 
@@ -9,7 +9,7 @@ Phase 3 provides the deployable management API. Automated scheduled monitoring r
 3. Use a SQLAlchemy psycopg URL: `postgresql+psycopg://...`.
 4. Set `DATABASE_URL` securely.
 5. Run `alembic upgrade head` from a trusted environment.
-6. Confirm the migration head is `0002_phase2_phase3`.
+6. Confirm the migration head is `0004_phase5`.
 
 The database remains the authoritative source of monitoring, matching, user state, Telegram linkage, and notification state.
 
@@ -87,9 +87,22 @@ The Phase 4 frontend uses a same-origin Next.js Route Handler proxy. The FastAPI
 
 After Vercel deployment, update Render `FRONTEND_URL` to the production Vercel origin. See `docs/phase4-setup-deployment.md` for the complete flow.
 
-## Monitoring deployment boundary
+## GitHub Actions — monitoring workers
 
-Phase 5 will add GitHub Actions schedules. Those jobs should receive `DATABASE_URL` and `TELEGRAM_BOT_TOKEN` through GitHub Actions secrets and execute the Python worker directly.
+The scheduled worker is `.github/workflows/scheduled_monitor.yml`. It executes the Python monitor directly; it does not wake or call Render.
+
+Add these repository secrets in GitHub:
+
+```text
+DATABASE_URL
+TELEGRAM_BOT_TOKEN
+```
+
+The database URL must target the production Supabase PostgreSQL instance. The Telegram token must be the same bot used by the production notification/webhook configuration.
+
+The workflow runs at `:07` and `:37` each hour and applies due-age/batch limits to watchlist, HIGH, NORMAL, and LOW registry sources. Trigger `workflow_dispatch` once after configuration and inspect `monitor_runs` / `crawler_logs` before relying on the schedule.
+
+See `docs/phase5-automated-monitoring.md` for exact setup, smoke tests, SQL, and scaling guidance.
 
 Do not schedule HTTP requests to Render as the monitoring mechanism.
 

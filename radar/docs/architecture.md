@@ -1,98 +1,110 @@
-# Architecture — Phase 0 through Phase 3
+# Architecture — Phase 0 through Phase 5
 
 ## Decision
 
-Keep Radar as a monorepo with a Next.js frontend foundation and one reusable Python backend/domain package. FastAPI serves user-management APIs. Monitoring runs as a standalone Python worker that talks directly to PostgreSQL, ATS sources, and Telegram.
+Keep Radar as one monorepo with a Next.js management UI and a reusable Python domain package. FastAPI serves authenticated management APIs. Monitoring remains a standalone worker that talks directly to PostgreSQL, ATS sources, and Telegram.
 
-## Reason
-
-This preserves the central architectural invariant: a sleeping Render instance cannot stop monitoring. It also lets API routes and workers reuse the same models, matching code, notification outbox, and persistence rules without introducing microservices or a queue service.
-
-## Tradeoffs
-
-- Synchronous SQLAlchemy is retained for the small database workload; external ATS/Telegram calls are async.
-- PostgreSQL is the source of truth for all monitoring, matching, Telegram linkage, and notification state.
-- PostgreSQL advisory locks protect overlapping company monitor executions without Redis.
-- First source synchronization persists jobs/matches as a baseline but does not push historical board contents as per-user alerts.
-- Notification delivery is practical at-least-once. Stale `SENDING` records can be retried; a rare duplicate remains possible if Telegram accepted a message immediately before a worker crash.
-
-## Main modules
+Phase 4.3 adds a clean separation between three concepts:
 
 ```text
-backend/app/
-  api/              FastAPI auth/domain/Telegram routes
-  collectors/       Greenhouse, Lever, Ashby
-  core/             settings, security, logging, HTTP
-  db/               engine/session/base
-  matching/         deterministic profile matching
-  models/           persistent domain models
-  notifications/    Telegram Bot API client
-  schemas/          API and normalized boundary models
-  scripts/          seed/admin/Telegram operational helpers
-  services/         lifecycle, matching integration, outbox, linking, state
-  workers/          standalone monitoring entrypoint
+Source Registry     = companies Radar knows how to monitor
+User Watchlist      = sources a particular user cares about most
+Profile Coverage    = WATCHLIST or WIDE matching scope
 ```
 
-## Monitoring path
+## Why
+
+This preserves the critical invariant that a sleeping Render API cannot stop monitoring. It also avoids duplicating ATS fetches per user: each company is fetched once, jobs are normalized once, then user/profile rules decide which jobs become matches.
+
+## Main flow
 
 ```text
-GitHub Actions later / manual command now
-             |
-             v
-        MonitorService
-             |
-             v
- Greenhouse / Lever / Ashby
-             |
-             v
-        NormalizedJob[]
-             |
-             v
-    dedup + lifecycle
-             |
-             v
-          Job rows
-             |
-             v
- deterministic matching
-             |
-             v
-        JobMatch rows
-             |
-             v
- verified TelegramConnection
-             |
-             v
-      Notification outbox
-             |
-             v
-          Telegram
+                           Job Profile
+                    coverage=WATCHLIST/WIDE
+                              |
+                              v
+                        Matching Engine
+                              ^
+                              |
+                       Normalized Jobs
+                              ^
+                              |
+               +--------------+--------------+
+               |              |              |
+          Greenhouse         Lever          Ashby
+               ^              ^              ^
+               |              |              |
+               +------ Company Registry -----+
+                              ^
+                              |
+                   user_company_watchlists
 ```
 
-FastAPI is not called anywhere in this path.
+### Watchlist profile
 
-## Domain invariants
+A `WATCHLIST` profile can only match a job when `(user_id, job.company_id)` exists in `user_company_watchlists`.
 
-1. Provider external IDs are preferred for source identity.
-2. Providers without an exposed external ID use a deterministic provider/company/application-URL fingerprint.
-3. Job uniqueness is protected by database constraints as well as application logic.
-4. Missing counters advance only after a successful complete source snapshot.
-5. Job matches are unique by `(job_profile_id, job_id)`.
-6. User saved/ignored state is one row per `(user_id, job_id)`, preventing contradictory states.
-7. Per-user notifications are unique by `(user_id, job_id, channel)`; recipient uniqueness remains as a second guard.
-8. Telegram link tokens are random, hashed at rest, expiring, and single-use.
-9. Every user-owned API resource is ownership checked on the backend.
-10. Workers require no persistent local filesystem state.
+### Wide profile
 
+A `WIDE` profile can match jobs from any active source already present in the registry.
 
-## Phase 4 web session boundary
+Existing pre-4.3 profiles migrate to `WIDE` for backward-compatible behavior.
 
-The browser does not persist the FastAPI JWT in localStorage. Authentication requests are sent to same-origin Next.js Route Handlers under `/api/radar/*`. After FastAPI returns a JWT, Next.js stores it in an HttpOnly, SameSite=Lax cookie. Server Components and Route Handlers read that cookie server-side and add the Bearer token when calling FastAPI.
+## Jobs browsing
+
+`Detected` is intentionally separate from `Matched`:
 
 ```text
-Browser -> Next.js (Vercel) -> FastAPI (Render) -> PostgreSQL (Supabase)
-             |
-             +-- HttpOnly session cookie
+Detected -> all collected source-registry jobs, paginated server-side
+Matched  -> distinct jobs with JobMatch rows for current user
+Saved    -> current user's SAVED states
+Ignored  -> current user's IGNORED states
 ```
 
-This keeps the existing Phase 3 JWT contract while avoiding exposure of the access token to ordinary browser JavaScript. The monitoring critical path remains unchanged and bypasses Next.js and Render.
+The Detected API does not return job descriptions and caps a request at 50 rows. The frontend uses 24 per page.
+
+## Source scheduling groundwork
+
+The worker can select:
+
+```text
+--scope all        all active sources
+--scope watchlist  sources watched by at least one user
+--scope registry   active sources currently watched by nobody
+```
+
+Phase 5 uses these scopes through one cost-aware GitHub Actions schedule. Database due-age state, bounded batches, bounded async concurrency, and optional deterministic sharding control how much work each invocation performs.
+
+```text
+GitHub Actions (:07/:37)
+          |
+          +-- watchlist sources (freshest tier)
+          +-- registry HIGH
+          +-- registry NORMAL
+          +-- registry LOW
+          |
+          v
+       monitor_runs
+          |
+          v
+     crawler_logs -> company pipeline
+```
+
+Each scheduled invocation is persisted independently of the GitHub runner. Per-company PostgreSQL advisory locks remain the final overlap guard.
+
+## Persistent invariants
+
+1. Monitoring never depends on FastAPI staying awake.
+2. ATS fetches are normalized into one downstream job model.
+3. Database constraints protect job/match/notification identity.
+4. Failed ATS requests cannot advance missing counters.
+5. User watchlists are relational and ownership-scoped.
+6. Profile coverage is deterministic and testable.
+7. Adding a watched company may backfill dashboard matches but does not send historical alert floods.
+8. Removing a watched company prunes only Watchlist-profile matches for that user's scope.
+9. Wide profiles remain independent of personal watchlists.
+10. Detected browsing is paginated server-side so registry growth does not require loading full job history in the browser.
+11. Scheduled workers use database state as their durable clock; GitHub Actions is only the trigger.
+12. A monitor invocation is observable through `monitor_runs`, with company outcomes linked through `crawler_logs`.
+13. Batching/sharding change execution distribution, not job identity or notification semantics.
+14. Phase 5 does not discover unknown companies; registry expansion remains Phase 6.

@@ -13,6 +13,11 @@ class MonitoringPriority(str, Enum):
     LOW = "LOW"
 
 
+class ProfileCoverageMode(str, Enum):
+    WATCHLIST = "WATCHLIST"
+    WIDE = "WIDE"
+
+
 class WorkMode(str, Enum):
     REMOTE = "REMOTE"
     HYBRID = "HYBRID"

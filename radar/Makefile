@@ -1,4 +1,4 @@
-.PHONY: backend-install backend-test backend-lint backend-format backend-run frontend-install frontend-lint frontend-typecheck frontend-build migrate monitor monitor-high monitor-normal monitor-low telegram-chat-id telegram-test telegram-webhook seed-cloudflare
+.PHONY: backend-install backend-test backend-lint backend-format backend-run frontend-install frontend-lint frontend-typecheck frontend-build migrate monitor monitor-high monitor-normal monitor-low monitor-watchlist monitor-registry scheduled-smoke telegram-chat-id telegram-test telegram-webhook seed-cloudflare
 
 backend-install:
 	cd backend && python -m pip install -e '.[dev]'
@@ -41,6 +41,15 @@ monitor-normal:
 
 monitor-low:
 	cd backend && python -m app.workers.monitor --priority low
+
+monitor-watchlist:
+	cd backend && python -m app.workers.monitor --scope watchlist --batch-size 50 --max-concurrency 3
+
+monitor-registry:
+	cd backend && python -m app.workers.monitor --scope registry --batch-size 50 --max-concurrency 3
+
+scheduled-smoke:
+	cd backend && python -m app.scripts.check_worker_config --require-telegram --require-remote-database
 
 telegram-chat-id:
 	cd backend && python -m app.scripts.telegram_chat_id

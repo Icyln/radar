@@ -6,11 +6,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import admin_user, current_user
+from app.matching.service import (
+    backfill_watchlist_profiles_for_company,
+    prune_watchlist_company_matches,
+)
 from app.db.session import get_db
 from app.models.company import Company
 from app.models.job import Job
 from app.models.user import User
+from app.models.user_company_watchlist import UserCompanyWatchlist
 from app.schemas.company import CompanyCreate, CompanyRead, CompanyUpdate
+from app.schemas.watchlist import CompanyWatchlistRead
 
 router = APIRouter(prefix="/api/v1/companies", tags=["companies"])
 
@@ -20,6 +26,68 @@ def list_companies(
     _: User = Depends(current_user), session: Session = Depends(get_db)
 ) -> list[Company]:
     return list(session.scalars(select(Company).order_by(Company.name.asc())))
+
+
+
+
+@router.get("/watchlist", response_model=list[CompanyWatchlistRead])
+def list_watchlist(
+    user: User = Depends(current_user), session: Session = Depends(get_db)
+) -> list[UserCompanyWatchlist]:
+    return list(
+        session.scalars(
+            select(UserCompanyWatchlist)
+            .where(UserCompanyWatchlist.user_id == user.id)
+            .order_by(UserCompanyWatchlist.created_at.asc())
+        )
+    )
+
+
+@router.put("/{company_id}/watchlist", response_model=CompanyWatchlistRead)
+def add_to_watchlist(
+    company_id: uuid.UUID,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> UserCompanyWatchlist:
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    existing = session.scalar(
+        select(UserCompanyWatchlist).where(
+            UserCompanyWatchlist.user_id == user.id,
+            UserCompanyWatchlist.company_id == company_id,
+        )
+    )
+    if existing is not None:
+        return existing
+
+    item = UserCompanyWatchlist(user_id=user.id, company_id=company_id)
+    session.add(item)
+    session.flush()
+    backfill_watchlist_profiles_for_company(session, user_id=user.id, company_id=company_id)
+    session.commit()
+    session.refresh(item)
+    return item
+
+
+@router.delete("/{company_id}/watchlist", status_code=status.HTTP_204_NO_CONTENT)
+def remove_from_watchlist(
+    company_id: uuid.UUID,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    item = session.scalar(
+        select(UserCompanyWatchlist).where(
+            UserCompanyWatchlist.user_id == user.id,
+            UserCompanyWatchlist.company_id == company_id,
+        )
+    )
+    if item is None:
+        return
+    session.delete(item)
+    session.flush()
+    prune_watchlist_company_matches(session, user_id=user.id, company_id=company_id)
+    session.commit()
 
 
 @router.post("", response_model=CompanyRead, status_code=status.HTTP_201_CREATED)

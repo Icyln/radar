@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.enums import WorkMode
+from app.models.enums import ProfileCoverageMode, WorkMode
 
 
 def _clean_list(values: list[str]) -> list[str]:
@@ -21,6 +21,7 @@ def _clean_list(values: list[str]) -> list[str]:
 class JobProfileCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     enabled: bool = True
+    coverage_mode: ProfileCoverageMode = ProfileCoverageMode.WIDE
     job_titles: list[str] = Field(min_length=1, max_length=25)
     locations: list[str] = Field(default_factory=list, max_length=25)
     work_modes: list[WorkMode] = Field(default_factory=list, max_length=4)
@@ -40,6 +41,7 @@ class JobProfileCreate(BaseModel):
 class JobProfileUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     enabled: bool | None = None
+    coverage_mode: ProfileCoverageMode | None = None
     job_titles: list[str] | None = Field(default=None, min_length=1, max_length=25)
     locations: list[str] | None = Field(default=None, max_length=25)
     work_modes: list[WorkMode] | None = Field(default=None, max_length=4)
@@ -63,6 +65,7 @@ class JobProfileRead(BaseModel):
     user_id: uuid.UUID
     name: str
     enabled: bool
+    coverage_mode: ProfileCoverageMode
     job_titles: list[str]
     locations: list[str]
     work_modes: list[WorkMode]

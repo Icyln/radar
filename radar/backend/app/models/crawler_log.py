@@ -15,6 +15,9 @@ class CrawlerLog(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    monitor_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("monitor_runs.id", ondelete="SET NULL"), index=True
+    )
     ats_provider: Mapped[ATSProvider] = mapped_column(Enum(ATSProvider, name="ats_provider"), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -32,3 +35,4 @@ class CrawlerLog(Base):
     duration_ms: Mapped[int | None] = mapped_column(BigInteger)
 
     company = relationship("Company", back_populates="crawler_logs")
+    monitor_run = relationship("MonitorRun", back_populates="crawler_logs")

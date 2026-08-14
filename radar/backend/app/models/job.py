@@ -18,6 +18,7 @@ class Job(TimestampMixin, Base):
         UniqueConstraint("company_id", "fingerprint", name="uq_job_company_fingerprint"),
         Index("ix_jobs_company_status", "company_id", "status"),
         Index("ix_jobs_status_last_seen", "status", "last_seen_at"),
+        Index("ix_jobs_status_first_seen", "status", "first_seen_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

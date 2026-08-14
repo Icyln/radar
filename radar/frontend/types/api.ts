@@ -3,6 +3,7 @@ export type JobStatus = "ACTIVE" | "UNKNOWN" | "CLOSED";
 export type UserJobState = "SAVED" | "IGNORED" | null;
 export type ATSProvider = "GREENHOUSE" | "LEVER" | "ASHBY";
 export type MonitoringPriority = "HIGH" | "NORMAL" | "LOW";
+export type ProfileCoverageMode = "WATCHLIST" | "WIDE";
 
 export interface User {
   id: string;
@@ -21,6 +22,7 @@ export interface JobProfile {
   user_id: string;
   name: string;
   enabled: boolean;
+  coverage_mode: ProfileCoverageMode;
   job_titles: string[];
   locations: string[];
   work_modes: WorkMode[];
@@ -32,6 +34,7 @@ export interface JobProfile {
 export interface JobProfilePayload {
   name: string;
   enabled: boolean;
+  coverage_mode: ProfileCoverageMode;
   job_titles: string[];
   locations: string[];
   work_modes: WorkMode[];
@@ -59,6 +62,7 @@ export interface JobListItem {
 export interface DashboardSummary {
   active_profiles: number;
   monitored_companies: number;
+  watched_companies: number;
   jobs_discovered_today: number;
   matches_today: number;
   alerts_sent_today: number;
@@ -105,4 +109,20 @@ export interface TelegramConnection {
 export interface TelegramLink {
   deep_link: string;
   expires_at: string;
+}
+
+export interface CompanyWatchlistEntry {
+  id: string;
+  user_id: string;
+  company_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DetectedJobPage {
+  items: JobListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 }

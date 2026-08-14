@@ -24,6 +24,14 @@ class JobListItem(BaseModel):
     user_state: UserJobStateType | None = None
 
 
+class DetectedJobPage(BaseModel):
+    items: list[JobListItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class JobDetail(JobListItem):
     description: str | None
 

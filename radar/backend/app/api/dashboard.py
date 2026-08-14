@@ -14,6 +14,7 @@ from app.models.job_match import JobMatch
 from app.models.job_profile import JobProfile
 from app.models.notification import Notification
 from app.models.user import User
+from app.models.user_company_watchlist import UserCompanyWatchlist
 from app.models.user_job_state import UserJobState
 from app.schemas.dashboard import DashboardSummary
 from app.schemas.jobs_api import JobListItem
@@ -38,6 +39,9 @@ def summary(
     ) or 0
     monitored_companies = session.scalar(
         select(func.count(Company.id)).where(Company.active.is_(True))
+    ) or 0
+    watched_companies = session.scalar(
+        select(func.count(UserCompanyWatchlist.id)).where(UserCompanyWatchlist.user_id == user.id)
     ) or 0
     jobs_discovered_today = session.scalar(
         select(func.count(distinct(JobMatch.job_id)))
@@ -102,6 +106,7 @@ def summary(
     return DashboardSummary(
         active_profiles=int(active_profiles),
         monitored_companies=int(monitored_companies),
+        watched_companies=int(watched_companies),
         jobs_discovered_today=int(jobs_discovered_today),
         matches_today=int(matches_today),
         alerts_sent_today=int(alerts_sent_today),

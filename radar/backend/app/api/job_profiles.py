@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
 from app.db.session import get_db
-from app.matching.service import backfill_profile_matches
+from app.matching.service import backfill_profile_matches, prune_profile_scope_matches
 from app.models.job_profile import JobProfile
 from app.models.user import User
 from app.schemas.job_profile import JobProfileCreate, JobProfileRead, JobProfileUpdate
@@ -44,6 +44,7 @@ def create_profile(
         user_id=user.id,
         name=payload.name,
         enabled=payload.enabled,
+        coverage_mode=payload.coverage_mode,
         job_titles=payload.job_titles,
         locations=payload.locations,
         work_modes=[mode.value for mode in payload.work_modes],
@@ -81,6 +82,7 @@ def update_profile(
     for field, value in updates.items():
         setattr(profile, field, value)
     session.flush()
+    prune_profile_scope_matches(session, profile=profile)
     if profile.enabled:
         backfill_profile_matches(session, profile=profile)
     session.commit()

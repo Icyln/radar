@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: radar-backend
-Version: 0.3.0
+Version: 0.5.0
 Summary: Radar job monitoring backend and worker
 Requires-Python: >=3.10
 Requires-Dist: alembic<2,>=1.18

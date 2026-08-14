@@ -1,6 +1,6 @@
 # Radar
 
-Radar is a small, dependable job-intelligence and early-warning system. This repository now contains **Phase 0 through Phase 4** of the master engineering specification.
+Radar is a small, dependable job-intelligence and early-warning system. This repository now contains **Phase 0 through Phase 5** of the master engineering specification.
 
 ## No-Docker local development
 
@@ -11,6 +11,8 @@ Start here:
 - [`docs/setup-no-docker.md`](docs/setup-no-docker.md) — original Phase 0/1 local setup and real Cloudflare Greenhouse smoke test
 - [`docs/phase2-phase3-setup.md`](docs/phase2-phase3-setup.md) — detailed Phase 2/3 upgrade, API, matching, authentication, and Telegram-linking guide
 - [`docs/phase4-setup-deployment.md`](docs/phase4-setup-deployment.md) — dashboard setup, local acceptance testing, and Vercel deployment
+- [`docs/phase4-3-two-mode-coverage.md`](docs/phase4-3-two-mode-coverage.md) — Watchlist/Wide Search upgrade, Detected jobs, migration, and acceptance test
+- [`docs/phase5-automated-monitoring.md`](docs/phase5-automated-monitoring.md) — GitHub Actions scheduling, repository secrets, batching, sharding, production smoke tests, and operational queries
 - [`docs/postgresql-manual-setup.sql.example`](docs/postgresql-manual-setup.sql.example) — local role/database creation example
 
 ## Implemented phases
@@ -84,7 +86,32 @@ Start here:
 - Telegram connection management
 - loading/error/empty states
 
-Phase 5 (scheduled GitHub Actions monitoring workflows) remains intentionally separate.
+### Phase 4.3 — Two-mode coverage
+
+- profile coverage: `WATCHLIST` or `WIDE`
+- per-user company watchlists
+- Watch / Watching company controls
+- Watchlist-aware matching/backfill/pruning
+- `Matched | Detected | Saved | Ignored` jobs navigation
+- paginated/filterable Detected jobs API and UI
+- source-scope worker groundwork (`all`, `watchlist`, `registry`)
+- watched-company dashboard metric
+
+### Phase 5 — Automated monitoring
+
+- GitHub Actions scheduled monitoring independent of Render
+- cost-aware consolidated watchlist/registry schedule
+- persistent `monitor_runs` execution records
+- due-age scheduling from database state
+- bounded batches and bounded async concurrency
+- stable deterministic sharding for large registries
+- worker trigger / external GitHub run correlation
+- source-level overlap protection retained through PostgreSQL advisory locks
+- production worker configuration preflight
+- CI hardening with current Python/Node setup actions
+- partial-company-failure tolerance without hiding fatal worker failures
+
+Phase 6 source discovery remains separate: Phase 5 automates monitoring of sources already in the registry.
 
 ## Runtime architecture
 
@@ -142,7 +169,7 @@ pytest
 Expected migration head:
 
 ```text
-0002_phase2_phase3
+0004_phase5
 ```
 
 Then follow [`docs/phase2-phase3-setup.md`](docs/phase2-phase3-setup.md).
@@ -181,6 +208,57 @@ python -m app.workers.monitor --priority high
 python -m app.workers.monitor --priority normal
 python -m app.workers.monitor --priority low
 ```
+
+Source scopes:
+
+```powershell
+python -m app.workers.monitor --scope all
+python -m app.workers.monitor --scope watchlist
+python -m app.workers.monitor --scope registry
+```
+
+
+### Bounded / due / sharded manual runs
+
+```powershell
+python -m app.workers.monitor --scope watchlist --batch-size 50 --min-age-minutes 25 --max-concurrency 3
+python -m app.workers.monitor --scope registry --priority normal --batch-size 50 --min-age-minutes 55
+python -m app.workers.monitor --scope registry --priority low --shard-index 0 --shard-count 4 --batch-size 100
+```
+
+`--min-age-minutes` uses persisted `last_checked_at` state, so repeated scheduled invocations do not blindly refetch sources that are not due yet.
+
+## GitHub Actions monitoring
+
+The production scheduled workflow is:
+
+```text
+.github/workflows/scheduled_monitor.yml
+```
+
+It runs one cost-aware worker job at `:07` and `:37` each hour and handles the source tiers with different due ages:
+
+```text
+watchlist      ~25 minutes
+registry HIGH  ~25 minutes
+registry NORMAL ~55 minutes
+registry LOW   ~235 minutes
+```
+
+Required GitHub repository secrets:
+
+```text
+DATABASE_URL
+TELEGRAM_BOT_TOKEN
+```
+
+Before enabling the schedule, run the production preflight locally or in CI:
+
+```powershell
+python -m app.scripts.check_worker_config --require-remote-database --require-telegram
+```
+
+See [`docs/phase5-automated-monitoring.md`](docs/phase5-automated-monitoring.md) for the full setup, workflow-dispatch smoke test, monitoring SQL, cost notes, and scaling guidance.
 
 ## Seed companies
 
@@ -264,7 +342,7 @@ npm run typecheck
 npm run build
 ```
 
-The backend tests cover Phase 1 behavior plus Lever/Ashby parsing, matching, match idempotency, authentication, ownership, job-profile CRUD flow, saved/ignored exclusivity, administrator company operations, and Telegram link-token behavior.
+The backend tests cover Phase 1 behavior plus Lever/Ashby parsing, matching, match idempotency, authentication, ownership, job-profile CRUD, Watchlist/Wide coverage, Detected pagination/source filtering, saved/ignored exclusivity, administrator company operations, monitor source scopes, due/batch/shard selection, persisted monitor-run grouping/status, scheduled-workflow safety, and Telegram link-token behavior.
 
 ## Engineering status
 

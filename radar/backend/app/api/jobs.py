@@ -2,24 +2,27 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
 from app.db.session import get_db
 from app.models.company import Company
-from app.models.enums import JobStatus, UserJobStateType
+from app.models.enums import ATSProvider, JobStatus, UserJobStateType, WorkMode
 from app.models.job import Job
 from app.models.job_match import JobMatch
 from app.models.user import User
+from app.models.user_company_watchlist import UserCompanyWatchlist
 from app.models.user_job_state import UserJobState
-from app.schemas.jobs_api import JobDetail, JobListItem, JobStateRequest
+from app.schemas.jobs_api import DetectedJobPage, JobDetail, JobListItem, JobStateRequest
 from app.services.user_job_states import JobStateError, set_job_state, user_can_manage_job
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
 
 
-def _state_map(session: Session, user_id: uuid.UUID, job_ids: list[uuid.UUID]) -> dict[uuid.UUID, UserJobStateType]:
+def _state_map(
+    session: Session, user_id: uuid.UUID, job_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, UserJobStateType]:
     if not job_ids:
         return {}
     states = session.execute(
@@ -82,6 +85,66 @@ def list_jobs(
     ).all()
     states = _state_map(session, user.id, [job.id for job, _ in rows])
     return [_serialize(job, company_name, states.get(job.id)) for job, company_name in rows]
+
+
+@router.get("/detected", response_model=DetectedJobPage)
+def list_detected_jobs(
+    job_status: JobStatus | None = Query(default=JobStatus.ACTIVE, alias="status"),
+    company_id: uuid.UUID | None = None,
+    company: str | None = Query(default=None, min_length=1, max_length=100),
+    provider: ATSProvider | None = None,
+    work_mode: WorkMode | None = None,
+    source: Literal["all", "watchlist", "other"] = "all",
+    q: str | None = Query(default=None, min_length=1, max_length=100),
+    limit: int = Query(default=24, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> DetectedJobPage:
+    """Browse all jobs Radar has detected without loading the entire history into the browser."""
+    filters = []
+    if job_status is not None:
+        filters.append(Job.status == job_status)
+    if company_id is not None:
+        filters.append(Job.company_id == company_id)
+    company_text = company.strip() if company else ""
+    if company_text:
+        filters.append(Company.name.ilike(f"%{company_text}%"))
+    if provider is not None:
+        filters.append(Job.ats_provider == provider)
+    if work_mode is not None:
+        filters.append(Job.work_mode == work_mode)
+
+    watched = select(UserCompanyWatchlist.id).where(
+        UserCompanyWatchlist.user_id == user.id,
+        UserCompanyWatchlist.company_id == Job.company_id,
+    ).exists()
+    if source == "watchlist":
+        filters.append(watched)
+    elif source == "other":
+        filters.append(~watched)
+
+    query_text = q.strip() if q else ""
+    if query_text:
+        pattern = f"%{query_text}%"
+        filters.append(or_(Job.title.ilike(pattern), Company.name.ilike(pattern)))
+
+    base = select(Job, Company.name).join(Company, Company.id == Job.company_id).where(*filters)
+    total = session.scalar(
+        select(func.count(Job.id)).select_from(Job).join(Company, Company.id == Job.company_id).where(*filters)
+    ) or 0
+    rows = session.execute(
+        base.order_by(Job.first_seen_at.desc(), Job.id.desc()).limit(limit).offset(offset)
+    ).all()
+    states = _state_map(session, user.id, [job.id for job, _ in rows])
+    items = [_serialize(job, company_name, states.get(job.id)) for job, company_name in rows]
+    return DetectedJobPage(
+        items=items,
+        total=int(total),
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(items) < int(total),
+    )
 
 
 @router.get("/{job_id}", response_model=JobDetail)

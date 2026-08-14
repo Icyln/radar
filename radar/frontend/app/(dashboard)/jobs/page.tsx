@@ -1,23 +1,132 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { JobCard } from "@/components/job-card";
 import { PageHeader } from "@/components/page-header";
 import { serverRequest } from "@/lib/server-api";
-import type { JobListItem, JobStatus } from "@/types/api";
+import type {
+  ATSProvider,
+  DetectedJobPage,
+  JobListItem,
+  JobStatus,
+  WorkMode
+} from "@/types/api";
 
-type Params = Promise<{ view?: string; status?: string }>;
-const views = ["matched", "saved", "ignored"] as const;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+const views = ["matched", "detected", "saved", "ignored"] as const;
 const statuses: JobStatus[] = ["ACTIVE", "UNKNOWN", "CLOSED"];
+const providers: ATSProvider[] = ["GREENHOUSE", "LEVER", "ASHBY"];
+const workModes: WorkMode[] = ["REMOTE", "HYBRID", "ONSITE", "UNKNOWN"];
+const pageSize = 24;
 
-export default async function JobsPage({ searchParams }: { searchParams: Params }) {
+function first(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function titleCase(value: string): string {
+  return value[0].toUpperCase() + value.slice(1).toLowerCase();
+}
+
+export default async function JobsPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
-  const view = views.includes(params.view as (typeof views)[number]) ? params.view! : "matched";
-  const status = statuses.includes(params.status as JobStatus) ? params.status! : "ACTIVE";
-  const jobs = await serverRequest<JobListItem[]>(`/api/v1/jobs?view=${view}&status=${status}&limit=100`);
+  const requestedView = first(params.view);
+  const requestedStatus = first(params.status);
+  const view = views.includes(requestedView as (typeof views)[number]) ? requestedView! : "matched";
+  const status = statuses.includes(requestedStatus as JobStatus) ? requestedStatus! as JobStatus : "ACTIVE";
 
-  const href = (nextView: string, nextStatus: string) => `/jobs?view=${nextView}&status=${nextStatus}`;
-  return <><PageHeader eyebrow="History" title="Jobs" description="Review matched jobs, your saved shortlist, ignored roles, and lifecycle state." />
-    <div className="mb-5 flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-2 sm:flex-row sm:items-center sm:justify-between"><div className="flex flex-wrap gap-1">{views.map((item)=><Link key={item} href={href(item,status)} className={item===view ? "tab-active" : "tab"}>{item[0].toUpperCase()+item.slice(1)}</Link>)}</div><div className="flex flex-wrap gap-1">{statuses.map((item)=><Link key={item} href={href(view,item)} className={item===status ? "tab-active" : "tab"}>{item[0]+item.slice(1).toLowerCase()}</Link>)}</div></div>
-    {jobs.length ? <div className="grid gap-4 xl:grid-cols-2">{jobs.map((job)=><JobCard key={job.id} job={job} />)}</div> : <EmptyState title={`No ${view} ${status.toLowerCase()} jobs`} description="This view contains only jobs matched to your Radar account (or saved/ignored from those matches). If it is empty, verify the production database has active jobs and that an enabled profile actually matches them." />}
+  const tabHref = (nextView: string, nextStatus: string) => `/jobs?view=${nextView}&status=${nextStatus}`;
+  let content: ReactNode;
+
+  if (view === "detected") {
+    const q = first(params.q) ?? "";
+    const company = first(params.company) ?? "";
+    const provider = providers.includes(first(params.provider) as ATSProvider) ? first(params.provider)! : "";
+    const mode = workModes.includes(first(params.mode) as WorkMode) ? first(params.mode)! : "";
+    const source = ["all", "watchlist", "other"].includes(first(params.source) ?? "") ? first(params.source)! : "all";
+    const page = Math.max(1, Number.parseInt(first(params.page) ?? "1", 10) || 1);
+    const offset = (page - 1) * pageSize;
+    const query = new URLSearchParams({ status, source, limit: String(pageSize), offset: String(offset) });
+    if (q.trim()) query.set("q", q.trim());
+    if (company.trim()) query.set("company", company.trim());
+    if (provider) query.set("provider", provider);
+    if (mode) query.set("work_mode", mode);
+
+    const result = await serverRequest<DetectedJobPage>(`/api/v1/jobs/detected?${query.toString()}`);
+
+    function pageHref(nextPage: number) {
+      const next = new URLSearchParams();
+      next.set("view", "detected");
+      next.set("status", status);
+      next.set("page", String(nextPage));
+      if (q.trim()) next.set("q", q.trim());
+      if (company.trim()) next.set("company", company.trim());
+      if (provider) next.set("provider", provider);
+      if (mode) next.set("mode", mode);
+      if (source !== "all") next.set("source", source);
+      return `/jobs?${next.toString()}`;
+    }
+
+    const start = result.total === 0 ? 0 : result.offset + 1;
+    const end = result.offset + result.items.length;
+    content = <>
+      <form method="get" action="/jobs" className="mb-5 panel p-4">
+        <input type="hidden" name="view" value="detected" />
+        <input type="hidden" name="status" value={status} />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <label className="field-label">Search
+            <input className="input mt-2" type="search" name="q" defaultValue={q} placeholder="Title or company" />
+          </label>
+          <label className="field-label">Company
+            <input className="input mt-2" name="company" defaultValue={company} placeholder="Any company" />
+          </label>
+          <label className="field-label">Provider
+            <select className="input mt-2" name="provider" defaultValue={provider}>
+              <option value="">Any provider</option>
+              {providers.map((item) => <option key={item} value={item}>{titleCase(item)}</option>)}
+            </select>
+          </label>
+          <label className="field-label">Work mode
+            <select className="input mt-2" name="mode" defaultValue={mode}>
+              <option value="">Any mode</option>
+              {workModes.map((item) => <option key={item} value={item}>{titleCase(item)}</option>)}
+            </select>
+          </label>
+          <label className="field-label">Source scope
+            <select className="input mt-2" name="source" defaultValue={source}>
+              <option value="all">All sources</option>
+              <option value="watchlist">My watchlist</option>
+              <option value="other">Other registry sources</option>
+            </select>
+          </label>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button className="button-primary" type="submit">Apply filters</button>
+          <Link className="button-ghost" href={`/jobs?view=detected&status=${status}`}>Clear</Link>
+          <span className="text-xs text-zinc-500">{result.total} detected · showing {start}–{end}</span>
+        </div>
+      </form>
+      {result.items.length ? <>
+        <div className="grid gap-4 xl:grid-cols-2">{result.items.map((job) => <JobCard key={job.id} job={job} compact />)}</div>
+        <div className="mt-6 flex items-center justify-between gap-4 border-t border-zinc-800 pt-5">
+          <Link aria-disabled={page <= 1} className={page <= 1 ? "button-secondary pointer-events-none opacity-40" : "button-secondary"} href={pageHref(page - 1)}>← Previous</Link>
+          <span className="text-xs text-zinc-500">Page {page}</span>
+          <Link aria-disabled={!result.has_more} className={!result.has_more ? "button-secondary pointer-events-none opacity-40" : "button-secondary"} href={pageHref(page + 1)}>Next →</Link>
+        </div>
+      </> : <EmptyState title={`No detected ${status.toLowerCase()} jobs`} description="No collected jobs match these filters. Detected shows the source registry directly; it does not require a job profile match." />}
+    </>;
+  } else {
+    const jobs = await serverRequest<JobListItem[]>(`/api/v1/jobs?view=${view}&status=${status}&limit=100`);
+    content = jobs.length
+      ? <div className="grid gap-4 xl:grid-cols-2">{jobs.map((job) => <JobCard key={job.id} job={job} />)}</div>
+      : <EmptyState title={`No ${view} ${status.toLowerCase()} jobs`} description="Matched is profile-driven. Saved and Ignored are your personal job states. Use Detected to inspect everything Radar collected from the source registry." />;
+  }
+
+  return <>
+    <PageHeader eyebrow="History" title="Jobs" description="Matched jobs stay focused; Detected lets you browse the wider source registry with server-side filters and pagination." />
+    <div className="mb-5 flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap gap-1">{views.map((item) => <Link key={item} href={tabHref(item, status)} className={item === view ? "tab-active" : "tab"}>{item[0].toUpperCase() + item.slice(1)}</Link>)}</div>
+      <div className="flex flex-wrap gap-1">{statuses.map((item) => <Link key={item} href={tabHref(view, item)} className={item === status ? "tab-active" : "tab"}>{titleCase(item)}</Link>)}</div>
+    </div>
+    {content}
   </>;
 }

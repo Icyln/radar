@@ -35,3 +35,6 @@ class Company(TimestampMixin, Base):
 
     jobs = relationship("Job", back_populates="company", cascade="all, delete-orphan")
     crawler_logs = relationship("CrawlerLog", back_populates="company", cascade="all, delete-orphan")
+    watchers = relationship(
+        "UserCompanyWatchlist", back_populates="company", cascade="all, delete-orphan"
+    )

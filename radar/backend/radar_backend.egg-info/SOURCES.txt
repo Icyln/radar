@@ -35,10 +35,12 @@ app/models/job.py
 app/models/job_match.py
 app/models/job_profile.py
 app/models/mixins.py
+app/models/monitor_run.py
 app/models/notification.py
 app/models/telegram_connection.py
 app/models/telegram_link_token.py
 app/models/user.py
+app/models/user_company_watchlist.py
 app/models/user_job_state.py
 app/notifications/__init__.py
 app/notifications/telegram.py
@@ -50,7 +52,9 @@ app/schemas/job.py
 app/schemas/job_profile.py
 app/schemas/jobs_api.py
 app/schemas/telegram.py
+app/schemas/watchlist.py
 app/scripts/__init__.py
+app/scripts/check_worker_config.py
 app/scripts/seed_company.py
 app/scripts/set_admin.py
 app/scripts/set_telegram_webhook.py
@@ -79,8 +83,12 @@ tests/test_greenhouse_collector.py
 tests/test_health.py
 tests/test_job_processing.py
 tests/test_lever_ashby_collectors.py
+tests/test_locking.py
 tests/test_matching.py
 tests/test_monitor_failure.py
+tests/test_monitor_success.py
 tests/test_notifications.py
 tests/test_phase2_notifications.py
+tests/test_phase43_coverage.py
+tests/test_phase5_monitoring.py
 tests/test_telegram_scripts.py

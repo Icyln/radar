@@ -1,10 +1,11 @@
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, Index, JSON, String, Uuid
+from sqlalchemy import Boolean, Enum, ForeignKey, Index, JSON, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.models.enums import ProfileCoverageMode
 from app.models.mixins import TimestampMixin
 
 json_type = JSON().with_variant(JSONB(), "postgresql")
@@ -20,6 +21,11 @@ class JobProfile(TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    coverage_mode: Mapped[ProfileCoverageMode] = mapped_column(
+        Enum(ProfileCoverageMode, name="profile_coverage_mode"),
+        default=ProfileCoverageMode.WIDE,
+        nullable=False,
+    )
     job_titles: Mapped[list[str]] = mapped_column(json_type, default=list, nullable=False)
     locations: Mapped[list[str]] = mapped_column(json_type, default=list, nullable=False)
     work_modes: Mapped[list[str]] = mapped_column(json_type, default=list, nullable=False)
