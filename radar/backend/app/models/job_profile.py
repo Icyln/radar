@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Index, JSON, String, Uuid
+from sqlalchemy import Boolean, Enum, ForeignKey, Index, Integer, JSON, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,8 @@ class JobProfile(TimestampMixin, Base):
     locations: Mapped[list[str]] = mapped_column(json_type, default=list, nullable=False)
     work_modes: Mapped[list[str]] = mapped_column(json_type, default=list, nullable=False)
     excluded_keywords: Mapped[list[str]] = mapped_column(json_type, default=list, nullable=False)
+    max_job_age_days: Mapped[int | None] = mapped_column(Integer, default=30, nullable=True)
+    include_unknown_posted_at: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     user = relationship("User", back_populates="job_profiles")
     matches = relationship("JobMatch", back_populates="job_profile", cascade="all, delete-orphan")

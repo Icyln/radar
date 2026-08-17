@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -19,6 +19,7 @@ class Job(TimestampMixin, Base):
         Index("ix_jobs_company_status", "company_id", "status"),
         Index("ix_jobs_status_last_seen", "status", "last_seen_at"),
         Index("ix_jobs_status_first_seen", "status", "first_seen_at"),
+        Index("ix_jobs_status_posted_at", "status", "posted_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -37,6 +38,7 @@ class Job(TimestampMixin, Base):
     apply_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     source_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    baseline_imported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     missing_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

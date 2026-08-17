@@ -52,3 +52,22 @@ class NotificationStatus(str, Enum):
 class UserJobStateType(str, Enum):
     SAVED = "SAVED"
     IGNORED = "IGNORED"
+
+
+class DiscoveryTargetOrigin(str, Enum):
+    USER = "USER"
+    SYSTEM_FEED = "SYSTEM_FEED"
+
+
+class DiscoveryTargetStatus(str, Enum):
+    PENDING = "PENDING"
+    SCANNING = "SCANNING"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+class DiscoveryCandidateStatus(str, Enum):
+    DISCOVERED = "DISCOVERED"
+    VALIDATING = "VALIDATING"
+    VALID = "VALID"
+    INVALID = "INVALID"

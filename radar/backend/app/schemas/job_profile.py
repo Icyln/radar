@@ -26,6 +26,8 @@ class JobProfileCreate(BaseModel):
     locations: list[str] = Field(default_factory=list, max_length=25)
     work_modes: list[WorkMode] = Field(default_factory=list, max_length=4)
     excluded_keywords: list[str] = Field(default_factory=list, max_length=50)
+    max_job_age_days: int | None = Field(default=30, ge=1, le=3650)
+    include_unknown_posted_at: bool = False
 
     @field_validator("name")
     @classmethod
@@ -46,6 +48,8 @@ class JobProfileUpdate(BaseModel):
     locations: list[str] | None = Field(default=None, max_length=25)
     work_modes: list[WorkMode] | None = Field(default=None, max_length=4)
     excluded_keywords: list[str] | None = Field(default=None, max_length=50)
+    max_job_age_days: int | None = Field(default=None, ge=1, le=3650)
+    include_unknown_posted_at: bool | None = None
 
     @field_validator("name")
     @classmethod
@@ -70,5 +74,7 @@ class JobProfileRead(BaseModel):
     locations: list[str]
     work_modes: list[WorkMode]
     excluded_keywords: list[str]
+    max_job_age_days: int | None
+    include_unknown_posted_at: bool
     created_at: datetime
     updated_at: datetime

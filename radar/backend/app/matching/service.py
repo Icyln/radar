@@ -20,6 +20,22 @@ class MatchCreationResult:
     match_ids: list[uuid.UUID]
 
 
+def profile_job_is_current_match(
+    *,
+    profile: JobProfile,
+    job: Job,
+    watch_pairs: set[tuple[uuid.UUID, uuid.UUID]],
+) -> bool:
+    if not profile.enabled:
+        return False
+    if (
+        profile.coverage_mode is ProfileCoverageMode.WATCHLIST
+        and (profile.user_id, job.company_id) not in watch_pairs
+    ):
+        return False
+    return evaluate_job_profile(job, profile).matched
+
+
 def _create_profile_job_matches(
     session: Session, *, profile: JobProfile, jobs: list[Job]
 ) -> MatchCreationResult:

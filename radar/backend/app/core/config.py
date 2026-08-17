@@ -31,6 +31,20 @@ class Settings(BaseSettings):
     monitor_run_trigger: str | None = None
     monitor_external_run_id: str | None = None
 
+    discovery_user_agent: str = "RadarDiscovery/0.6 (+targeted ATS source validation)"
+    discovery_max_pages_per_target: int = Field(default=6, ge=1, le=20)
+    discovery_target_batch_size: int = Field(default=25, ge=1, le=200)
+    discovery_candidate_batch_size: int = Field(default=50, ge=1, le=500)
+    discovery_max_concurrency: int = Field(default=3, ge=1, le=10)
+    discovery_stale_minutes: int = Field(default=30, ge=5, le=1440)
+    discovery_system_feed_urls: str = ""
+    discovery_system_feed_max_bytes: int = Field(default=1_000_000, ge=1024, le=10_000_000)
+    discovery_system_feed_max_entries: int = Field(default=1000, ge=1, le=10000)
+    discovery_system_target_refresh_days: int = Field(default=30, ge=1, le=365)
+    discovery_revalidate_days: int = Field(default=14, ge=1, le=365)
+    discovery_invalid_retry_days: int = Field(default=7, ge=1, le=365)
+    discovery_revalidate_batch_size: int = Field(default=50, ge=1, le=500)
+
     telegram_bot_token: str | None = None
     telegram_bot_username: str | None = None
     telegram_webhook_secret: str | None = None
@@ -80,6 +94,10 @@ class Settings(BaseSettings):
     @property
     def admin_email_set(self) -> set[str]:
         return {item.strip().casefold() for item in self.admin_emails.split(",") if item.strip()}
+
+    @property
+    def discovery_system_feed_url_list(self) -> tuple[str, ...]:
+        return tuple(part.strip() for part in self.discovery_system_feed_urls.split(",") if part.strip())
 
 
 @lru_cache

@@ -49,6 +49,8 @@ def create_profile(
         locations=payload.locations,
         work_modes=[mode.value for mode in payload.work_modes],
         excluded_keywords=payload.excluded_keywords,
+        max_job_age_days=payload.max_job_age_days,
+        include_unknown_posted_at=payload.include_unknown_posted_at,
     )
     session.add(profile)
     session.flush()

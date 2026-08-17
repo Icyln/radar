@@ -1,8 +1,10 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.models.enums import WorkMode
 from app.models.job import Job
 from app.models.job_profile import JobProfile
+from app.matching.freshness import job_freshness_evidence, job_matches_profile_freshness
 from app.services.text import normalize_for_match
 
 
@@ -22,10 +24,27 @@ def _token_subset(needle: str, haystack: str) -> bool:
     return bool(wanted) and wanted.issubset(available)
 
 
-def evaluate_job_profile(job: Job, profile: JobProfile) -> MatchDecision:
+def evaluate_job_profile(job: Job, profile: JobProfile, *, now: datetime | None = None) -> MatchDecision:
     title = normalize_for_match(job.title)
     location = normalize_for_match(job.location or "")
     searchable = normalize_for_match(" ".join([job.title, job.location or "", job.description or ""]))
+
+    if not job_matches_profile_freshness(job, profile, now=now):
+        evidence = job_freshness_evidence(job)
+        if evidence.source == "UNKNOWN":
+            rejection = "posting date unavailable"
+        else:
+            rejection = f"job is older than {profile.max_job_age_days} days"
+        return MatchDecision(
+            matched=False,
+            reason={
+                "matched_title": None,
+                "matched_location": None,
+                "matched_work_mode": None,
+                "matched_freshness": None,
+                "rejection_reason": rejection,
+            },
+        )
 
     for keyword in profile.excluded_keywords or []:
         normalized = normalize_for_match(keyword)
@@ -36,6 +55,7 @@ def evaluate_job_profile(job: Job, profile: JobProfile) -> MatchDecision:
                     "matched_title": None,
                     "matched_location": None,
                     "matched_work_mode": None,
+                    "matched_freshness": None,
                     "rejection_reason": f"excluded keyword: {keyword}",
                 },
             )
@@ -51,6 +71,7 @@ def evaluate_job_profile(job: Job, profile: JobProfile) -> MatchDecision:
                 "matched_title": None,
                 "matched_location": None,
                 "matched_work_mode": None,
+                "matched_freshness": None,
                 "rejection_reason": "title did not match",
             },
         )
@@ -73,6 +94,7 @@ def evaluate_job_profile(job: Job, profile: JobProfile) -> MatchDecision:
                     "matched_title": matched_title,
                     "matched_location": None,
                     "matched_work_mode": None,
+                    "matched_freshness": None,
                     "rejection_reason": "location did not match",
                 },
             )
@@ -87,17 +109,20 @@ def evaluate_job_profile(job: Job, profile: JobProfile) -> MatchDecision:
                     "matched_title": matched_title,
                     "matched_location": matched_location,
                     "matched_work_mode": None,
+                    "matched_freshness": None,
                     "rejection_reason": "work mode did not match",
                 },
             )
         matched_work_mode = job.work_mode.value
 
+    freshness = job_freshness_evidence(job)
     return MatchDecision(
         matched=True,
         reason={
             "matched_title": matched_title,
             "matched_location": matched_location,
             "matched_work_mode": matched_work_mode,
+            "matched_freshness": freshness.source,
             "rejection_reason": None,
         },
     )

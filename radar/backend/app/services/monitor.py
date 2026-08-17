@@ -341,17 +341,21 @@ class MonitorService:
                         jobs=jobs,
                         missing_threshold=self.settings.job_missing_threshold,
                         now=completed,
+                        initial_sync=initial_sync,
                     )
-                    match_result = create_matches_for_jobs(
-                        session,
-                        job_ids=[*result.new_job_ids, *result.updated_job_ids],
+                    new_match_result = create_matches_for_jobs(
+                        session, job_ids=result.new_job_ids
                     )
-                    # Initial source sync establishes a baseline. Matches are persisted for
-                    # the dashboard, but existing board contents are not pushed as alerts.
+                    updated_match_result = create_matches_for_jobs(
+                        session, job_ids=result.updated_job_ids
+                    )
+                    matches_created = new_match_result.created + updated_match_result.created
+                    # Initial source sync establishes a baseline. Dashboard matches may be
+                    # persisted, but only genuinely new post-baseline jobs can enqueue alerts.
                     if not initial_sync:
                         enqueue_match_notifications(
                             session,
-                            match_ids=match_result.match_ids,
+                            match_ids=new_match_result.match_ids,
                             crawler_log_id=crawler_log.id,
                         )
                     # Retain the Phase-1 single-recipient path for local smoke testing.
@@ -371,7 +375,7 @@ class MonitorService:
                     crawler_log.jobs_new = result.jobs_new
                     crawler_log.jobs_updated = result.jobs_updated
                     crawler_log.jobs_closed = result.jobs_closed
-                    crawler_log.matches_created = match_result.created
+                    crawler_log.matches_created = matches_created
                     crawler_log.duration_ms = int((time.monotonic() - monotonic_started) * 1000)
                     session.commit()
                 return "success"

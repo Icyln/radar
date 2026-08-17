@@ -1,8 +1,9 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
@@ -11,10 +12,13 @@ from app.models.company import Company
 from app.models.enums import ATSProvider, JobStatus, UserJobStateType, WorkMode
 from app.models.job import Job
 from app.models.job_match import JobMatch
+from app.models.job_profile import JobProfile
 from app.models.user import User
 from app.models.user_company_watchlist import UserCompanyWatchlist
 from app.models.user_job_state import UserJobState
 from app.schemas.jobs_api import DetectedJobPage, JobDetail, JobListItem, JobStateRequest
+from app.matching.freshness import job_freshness_evidence
+from app.matching.service import profile_job_is_current_match
 from app.services.user_job_states import JobStateError, set_job_state, user_can_manage_job
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
@@ -34,6 +38,7 @@ def _state_map(
 
 
 def _serialize(job: Job, company_name: str, state: UserJobStateType | None) -> JobListItem:
+    freshness = job_freshness_evidence(job)
     return JobListItem(
         id=job.id,
         company_id=job.company_id,
@@ -50,6 +55,8 @@ def _serialize(job: Job, company_name: str, state: UserJobStateType | None) -> J
         status=job.status,
         closed_at=job.closed_at,
         user_state=state,
+        freshness_at=freshness.at,
+        freshness_source=freshness.source,
     )
 
 
@@ -64,12 +71,31 @@ def list_jobs(
 ) -> list[JobListItem]:
     if view == "matched":
         statement = (
-            select(Job, Company.name)
+            select(Job, Company.name, JobProfile)
             .join(Company, Company.id == Job.company_id)
             .join(JobMatch, JobMatch.job_id == Job.id)
-            .where(JobMatch.user_id == user.id)
-            .distinct()
+            .join(JobProfile, JobProfile.id == JobMatch.job_profile_id)
+            .where(JobMatch.user_id == user.id, JobProfile.enabled.is_(True))
+            .order_by(Job.first_seen_at.desc(), Job.id.desc())
         )
+        if job_status is not None:
+            statement = statement.where(Job.status == job_status)
+        watch_pairs = set(
+            session.execute(
+                select(UserCompanyWatchlist.user_id, UserCompanyWatchlist.company_id).where(
+                    UserCompanyWatchlist.user_id == user.id
+                )
+            ).all()
+        )
+        current: list[tuple[Job, str]] = []
+        seen: set[uuid.UUID] = set()
+        for job, company_name, profile in session.execute(statement).all():
+            if job.id in seen:
+                continue
+            if profile_job_is_current_match(profile=profile, job=job, watch_pairs=watch_pairs):
+                seen.add(job.id)
+                current.append((job, company_name))
+        rows = current[offset : offset + limit]
     else:
         desired = UserJobStateType.SAVED if view == "saved" else UserJobStateType.IGNORED
         statement = (
@@ -78,11 +104,11 @@ def list_jobs(
             .join(UserJobState, UserJobState.job_id == Job.id)
             .where(UserJobState.user_id == user.id, UserJobState.state == desired)
         )
-    if job_status is not None:
-        statement = statement.where(Job.status == job_status)
-    rows = session.execute(
-        statement.order_by(Job.first_seen_at.desc()).limit(limit).offset(offset)
-    ).all()
+        if job_status is not None:
+            statement = statement.where(Job.status == job_status)
+        rows = session.execute(
+            statement.order_by(Job.first_seen_at.desc()).limit(limit).offset(offset)
+        ).all()
     states = _state_map(session, user.id, [job.id for job, _ in rows])
     return [_serialize(job, company_name, states.get(job.id)) for job, company_name in rows]
 
@@ -96,6 +122,7 @@ def list_detected_jobs(
     work_mode: WorkMode | None = None,
     source: Literal["all", "watchlist", "other"] = "all",
     q: str | None = Query(default=None, min_length=1, max_length=100),
+    freshness: Literal["any", "1", "3", "7", "14", "30", "60", "90", "unknown"] = "any",
     limit: int = Query(default=24, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(current_user),
@@ -114,6 +141,21 @@ def list_detected_jobs(
         filters.append(Job.ats_provider == provider)
     if work_mode is not None:
         filters.append(Job.work_mode == work_mode)
+
+    if freshness == "unknown":
+        filters.extend([Job.posted_at.is_(None), Job.baseline_imported.is_(True)])
+    elif freshness != "any":
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(freshness))
+        filters.append(
+            or_(
+                Job.posted_at >= cutoff,
+                and_(
+                    Job.posted_at.is_(None),
+                    Job.baseline_imported.is_(False),
+                    Job.first_seen_at >= cutoff,
+                ),
+            )
+        )
 
     watched = select(UserCompanyWatchlist.id).where(
         UserCompanyWatchlist.user_id == user.id,

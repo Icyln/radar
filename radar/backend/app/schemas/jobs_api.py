@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
+from typing import Literal
 
 from app.models.enums import JobStatus, UserJobStateType, WorkMode
 
@@ -22,6 +23,8 @@ class JobListItem(BaseModel):
     status: JobStatus
     closed_at: datetime | None
     user_state: UserJobStateType | None = None
+    freshness_at: datetime | None = None
+    freshness_source: Literal["POSTED_AT", "FIRST_SEEN", "UNKNOWN"] = "UNKNOWN"
 
 
 class DetectedJobPage(BaseModel):

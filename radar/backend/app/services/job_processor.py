@@ -40,6 +40,7 @@ def process_successful_snapshot(
     jobs: list[NormalizedJob],
     missing_threshold: int,
     now: datetime | None = None,
+    initial_sync: bool = False,
 ) -> JobProcessingResult:
     """Persist one complete successful source snapshot and advance lifecycle."""
     observed_at = now or datetime.now(timezone.utc)
@@ -82,6 +83,7 @@ def process_successful_snapshot(
                 apply_url=incoming.apply_url,
                 source_url=incoming.source_url,
                 posted_at=incoming.posted_at,
+                baseline_imported=initial_sync,
                 first_seen_at=observed_at,
                 last_seen_at=observed_at,
                 missing_count=0,

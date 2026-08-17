@@ -16,6 +16,8 @@ from app.models.notification import Notification
 from app.models.user import User
 from app.models.user_company_watchlist import UserCompanyWatchlist
 from app.models.user_job_state import UserJobState
+from app.matching.freshness import job_freshness_evidence
+from app.matching.service import profile_job_is_current_match
 from app.schemas.dashboard import DashboardSummary
 from app.schemas.jobs_api import JobListItem
 
@@ -64,15 +66,31 @@ def summary(
         select(func.max(CrawlerLog.completed_at)).where(CrawlerLog.status == CrawlerStatus.SUCCESS)
     )
 
-    rows = session.execute(
-        select(Job, Company.name)
+    candidate_rows = session.execute(
+        select(Job, Company.name, JobProfile)
         .join(Company, Company.id == Job.company_id)
         .join(JobMatch, JobMatch.job_id == Job.id)
-        .where(JobMatch.user_id == user.id)
-        .distinct()
-        .order_by(Job.first_seen_at.desc())
-        .limit(5)
+        .join(JobProfile, JobProfile.id == JobMatch.job_profile_id)
+        .where(JobMatch.user_id == user.id, JobProfile.enabled.is_(True))
+        .order_by(Job.first_seen_at.desc(), Job.id.desc())
     ).all()
+    watch_pairs = set(
+        session.execute(
+            select(UserCompanyWatchlist.user_id, UserCompanyWatchlist.company_id).where(
+                UserCompanyWatchlist.user_id == user.id
+            )
+        ).all()
+    )
+    rows: list[tuple[Job, str]] = []
+    seen: set = set()
+    for job, company_name, profile in candidate_rows:
+        if job.id in seen:
+            continue
+        if profile_job_is_current_match(profile=profile, job=job, watch_pairs=watch_pairs):
+            seen.add(job.id)
+            rows.append((job, company_name))
+            if len(rows) == 5:
+                break
     job_ids = [job.id for job, _ in rows]
     states = {
         job_id: state
@@ -100,6 +118,8 @@ def summary(
             status=job.status,
             closed_at=job.closed_at,
             user_state=states.get(job.id),
+            freshness_at=job_freshness_evidence(job).at,
+            freshness_source=job_freshness_evidence(job).source,
         )
         for job, company_name in rows
     ]
