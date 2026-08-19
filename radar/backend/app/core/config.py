@@ -31,12 +31,14 @@ class Settings(BaseSettings):
     monitor_run_trigger: str | None = None
     monitor_external_run_id: str | None = None
 
-    discovery_user_agent: str = "RadarDiscovery/0.6 (+targeted ATS source validation)"
+    discovery_user_agent: str = "RadarDiscovery/0.7.3 (+wide job discovery and ATS source resolution)"
     discovery_max_pages_per_target: int = Field(default=6, ge=1, le=20)
     discovery_target_batch_size: int = Field(default=25, ge=1, le=200)
     discovery_candidate_batch_size: int = Field(default=50, ge=1, le=500)
     discovery_max_concurrency: int = Field(default=3, ge=1, le=10)
     discovery_stale_minutes: int = Field(default=30, ge=5, le=1440)
+    discovery_target_total_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    discovery_candidate_total_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     discovery_system_feed_urls: str = ""
     discovery_system_feed_max_bytes: int = Field(default=1_000_000, ge=1024, le=10_000_000)
     discovery_system_feed_max_entries: int = Field(default=1000, ge=1, le=10000)
@@ -44,6 +46,17 @@ class Settings(BaseSettings):
     discovery_revalidate_days: int = Field(default=14, ge=1, le=365)
     discovery_invalid_retry_days: int = Field(default=7, ge=1, le=365)
     discovery_revalidate_batch_size: int = Field(default=50, ge=1, le=500)
+    discovery_hiring_signals_enabled: bool = True
+    discovery_hiring_max_age_days: int = Field(default=30, ge=1, le=90)
+    discovery_hiring_max_queries: int = Field(default=25, ge=1, le=100)
+    discovery_hiring_max_signals_per_run: int = Field(default=500, ge=1, le=5000)
+    discovery_hiring_max_identifier_guesses: int = Field(default=3, ge=1, le=5)
+    discovery_hiring_max_probe_candidates_per_run: int = Field(default=150, ge=1, le=2000)
+    discovery_hiring_request_total_timeout_seconds: float = Field(default=25.0, gt=0, le=120)
+    discovery_hiring_arbeitnow_enabled: bool = True
+    discovery_hiring_arbeitnow_pages: int = Field(default=2, ge=1, le=10)
+    discovery_hiring_himalayas_enabled: bool = True
+    discovery_hiring_priority_boost_days: int = Field(default=7, ge=1, le=30)
 
     telegram_bot_token: str | None = None
     telegram_bot_username: str | None = None

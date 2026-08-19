@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
 import logging
+import re
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -14,9 +17,10 @@ from app.collectors.base import BaseCollector, CollectorError
 from app.collectors.registry import build_collector
 from app.core.config import Settings
 from app.discovery.crawler import SafeHtmlFetcher, TargetCrawler
-from app.discovery.detector import detect_ats_source
+from app.discovery.detector import DetectedSource, detect_ats_source
 from app.discovery.feeds import DiscoveryFeedEntry, RemoteDiscoveryFeedFetcher, load_bundled_feed
-from app.matching.service import backfill_watchlist_profiles_for_company
+from app.discovery.hiring import HiringSignal, HiringSignalProvider, PublicHiringSignalProvider
+from app.matching.service import backfill_watchlist_profiles_for_company, create_matches_for_jobs
 from app.models.company import Company
 from app.models.discovery_target import DiscoveryTarget
 from app.models.discovery_target_candidate import DiscoveryTargetCandidate
@@ -26,16 +30,41 @@ from app.models.enums import (
     DiscoveryTargetOrigin,
     DiscoveryTargetStatus,
     MonitoringPriority,
+    ProfileCoverageMode,
+    JobStatus,
+    WorkMode,
 )
+from app.models.job import Job
+from app.models.job_match import JobMatch
+from app.models.job_profile import JobProfile
 from app.models.source_candidate import SourceCandidate
+from app.models.user import User
 from app.models.user_company_watchlist import UserCompanyWatchlist
 from app.schemas.company import CompanyTarget
+from app.services.notifications import deliver_pending_notifications, enqueue_match_notifications
+from app.services.text import normalize_for_match
 
 logger = logging.getLogger(__name__)
 CollectorFactory = Callable[[ATSProvider, Settings], BaseCollector]
+HiringProviderFactory = Callable[[Settings], HiringSignalProvider]
 
 
 class DiscoveryService:
+    _CORPORATE_SUFFIXES = {
+        "inc",
+        "incorporated",
+        "llc",
+        "ltd",
+        "limited",
+        "corp",
+        "corporation",
+        "company",
+        "co",
+        "plc",
+        "gmbh",
+        "com",
+    }
+
     def __init__(
         self,
         *,
@@ -43,11 +72,15 @@ class DiscoveryService:
         settings: Settings,
         collector_factory: CollectorFactory = build_collector,
         crawler_factory: Callable[[], TargetCrawler] | None = None,
+        hiring_provider_factory: HiringProviderFactory | None = None,
     ) -> None:
         self.engine = engine
         self.settings = settings
         self.collector_factory = collector_factory
         self._crawler_factory = crawler_factory
+        self._hiring_provider_factory = hiring_provider_factory or (
+            lambda settings: PublicHiringSignalProvider(settings=settings)
+        )
 
     def _build_crawler(self) -> TargetCrawler:
         if self._crawler_factory is not None:
@@ -70,6 +103,29 @@ class DiscoveryService:
         if not parsed.scheme or not parsed.netloc:
             return None
         return f"{parsed.scheme}://{parsed.netloc}"
+
+    def _extend_hiring_boost(
+        self, company: Company, target: DiscoveryTarget | None
+    ) -> None:
+        if target is None or target.job_posted_at_hint is None:
+            return
+        signal_at = target.job_posted_at_hint
+        if signal_at.tzinfo is None:
+            signal_at = signal_at.replace(tzinfo=timezone.utc)
+        else:
+            signal_at = signal_at.astimezone(timezone.utc)
+        boost_until = signal_at + timedelta(days=self.settings.discovery_hiring_priority_boost_days)
+        now = datetime.now(timezone.utc)
+        if boost_until <= now:
+            return
+        current = company.discovery_boost_until
+        if current is not None:
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=timezone.utc)
+            else:
+                current = current.astimezone(timezone.utc)
+        if current is None or boost_until > current:
+            company.discovery_boost_until = boost_until
 
     @staticmethod
     def _ensure_watchlist(session: Session, *, user_id: uuid.UUID, company_id: uuid.UUID) -> None:
@@ -99,19 +155,50 @@ class DiscoveryService:
 
         crawler = self._build_crawler()
         try:
-            result = await crawler.scan(
-                target_url, max_pages=self.settings.discovery_max_pages_per_target
+            result = await asyncio.wait_for(
+                crawler.scan(
+                    target_url, max_pages=self.settings.discovery_max_pages_per_target
+                ),
+                timeout=self.settings.discovery_target_total_timeout_seconds,
             )
-        except Exception as exc:
+        except asyncio.TimeoutError:
+            error_type = "TimeoutError"
+            error_message = (
+                "target scan exceeded "
+                f"{self.settings.discovery_target_total_timeout_seconds:g}s total timeout"
+            )
             with Session(self.engine) as session:
                 target = session.get(DiscoveryTarget, target_id)
                 if target is not None:
                     target.status = DiscoveryTargetStatus.FAILED
                     target.last_scanned_at = datetime.now(timezone.utc)
-                    target.error_type = exc.__class__.__name__
-                    target.error_message = str(exc)[:2000]
+                    target.error_type = error_type
+                    target.error_message = error_message
                     session.commit()
-            logger.warning("discovery target scan failed", extra={"target_id": str(target_id)})
+            logger.warning(
+                "discovery target scan failed: %s (%s: %s)",
+                target_url,
+                error_type,
+                error_message,
+            )
+            return "failed"
+        except Exception as exc:
+            error_type = exc.__class__.__name__
+            error_message = str(exc) or repr(exc)
+            with Session(self.engine) as session:
+                target = session.get(DiscoveryTarget, target_id)
+                if target is not None:
+                    target.status = DiscoveryTargetStatus.FAILED
+                    target.last_scanned_at = datetime.now(timezone.utc)
+                    target.error_type = error_type
+                    target.error_message = error_message[:2000]
+                    session.commit()
+            logger.warning(
+                "discovery target scan failed: %s (%s: %s)",
+                target_url,
+                error_type,
+                error_message[:500],
+            )
             return "failed"
         finally:
             await crawler.fetcher.close()
@@ -173,6 +260,8 @@ class DiscoveryService:
                         )
                     )
                     session.flush()
+                if company is not None:
+                    self._extend_hiring_boost(company, target)
                 found += 1
                 if company is not None and target.auto_watch and target.submitted_by_user_id:
                     self._ensure_watchlist(
@@ -212,7 +301,10 @@ class DiscoveryService:
         collector: BaseCollector | None = None
         try:
             collector = self.collector_factory(provider, self.settings)
-            jobs = await collector.fetch_jobs(target)
+            jobs = await asyncio.wait_for(
+                collector.fetch_jobs(target),
+                timeout=self.settings.discovery_candidate_total_timeout_seconds,
+            )
         except CollectorError as exc:
             with Session(self.engine) as session:
                 candidate = session.get(SourceCandidate, candidate_id)
@@ -236,6 +328,44 @@ class DiscoveryService:
         finally:
             if collector is not None:
                 await collector.close()
+
+        with Session(self.engine) as session:
+            hiring_targets = list(
+                session.scalars(
+                    select(DiscoveryTarget)
+                    .join(
+                        DiscoveryTargetCandidate,
+                        DiscoveryTargetCandidate.discovery_target_id == DiscoveryTarget.id,
+                    )
+                    .where(
+                        DiscoveryTargetCandidate.source_candidate_id == candidate_id,
+                        DiscoveryTarget.source_label.like("hiring-signal:%"),
+                        DiscoveryTarget.job_title_hint.is_not(None),
+                    )
+                )
+            )
+
+        if hiring_targets:
+            job_titles = {normalize_for_match(job.title) for job in jobs if job.title}
+            signal_titles = {
+                normalize_for_match(target.job_title_hint)
+                for target in hiring_targets
+                if target.job_title_hint
+            }
+            signal_titles.discard("")
+            if not job_titles.intersection(signal_titles):
+                with Session(self.engine) as session:
+                    candidate = session.get(SourceCandidate, candidate_id)
+                    if candidate is not None:
+                        candidate.status = DiscoveryCandidateStatus.INVALID
+                        candidate.last_validated_at = datetime.now(timezone.utc)
+                        candidate.error_type = "signal-mismatch"
+                        candidate.error_message = (
+                            "ATS tenant probe did not contain any fresh hiring-signal title; "
+                            "candidate rejected to prevent company-slug collisions"
+                        )
+                        session.commit()
+                return "invalid"
 
         with Session(self.engine) as session:
             candidate = session.get(SourceCandidate, candidate_id)
@@ -266,6 +396,18 @@ class DiscoveryService:
                 if candidate.discovery_target_id
                 else None
             )
+            linked_targets = list(
+                session.scalars(
+                    select(DiscoveryTarget)
+                    .join(
+                        DiscoveryTargetCandidate,
+                        DiscoveryTargetCandidate.discovery_target_id == DiscoveryTarget.id,
+                    )
+                    .where(DiscoveryTargetCandidate.source_candidate_id == candidate.id)
+                )
+            )
+            if not linked_targets and target is not None:
+                linked_targets = [target]
             company = session.scalar(
                 select(Company).where(
                     Company.ats_provider == candidate.ats_provider,
@@ -284,21 +426,27 @@ class DiscoveryService:
                 )
                 session.add(company)
                 session.flush()
+            for linked_target in linked_targets:
+                self._extend_hiring_boost(company, linked_target)
+                if (
+                    linked_target.source_label
+                    and linked_target.source_label.startswith("hiring-signal:")
+                    and linked_target.signal_external_id
+                ):
+                    source_provider = linked_target.source_label.split(":", 1)[1][:100]
+                    wide_job = session.scalar(
+                        select(Job).where(
+                            Job.source_provider == source_provider,
+                            Job.source_external_id == linked_target.signal_external_id,
+                        )
+                    )
+                    if wide_job is not None and wide_job.company_id is None:
+                        # Preserve WIDE provenance while attaching the newly verified
+                        # employer. The next direct monitor can upgrade this same row.
+                        wide_job.company_id = company.id
 
             candidate.promoted_company_id = company.id
             candidate.promoted_at = datetime.now(timezone.utc)
-            linked_targets = list(
-                session.scalars(
-                    select(DiscoveryTarget)
-                    .join(
-                        DiscoveryTargetCandidate,
-                        DiscoveryTargetCandidate.discovery_target_id == DiscoveryTarget.id,
-                    )
-                    .where(DiscoveryTargetCandidate.source_candidate_id == candidate.id)
-                )
-            )
-            if not linked_targets and target is not None:
-                linked_targets = [target]
             for linked_target in linked_targets:
                 if linked_target.auto_watch and linked_target.submitted_by_user_id:
                     self._ensure_watchlist(
@@ -427,6 +575,572 @@ class DiscoveryService:
                 await fetcher.close()
         return summary
 
+    def active_wide_profiles(self, *, user_id: uuid.UUID | None = None) -> list[JobProfile]:
+        with Session(self.engine) as session:
+            statement = (
+                select(JobProfile)
+                .join(User, User.id == JobProfile.user_id)
+                .where(
+                    JobProfile.enabled.is_(True),
+                    JobProfile.coverage_mode == ProfileCoverageMode.WIDE,
+                    User.is_active.is_(True),
+                )
+                .order_by(JobProfile.created_at.asc())
+            )
+            if user_id is not None:
+                statement = statement.where(JobProfile.user_id == user_id)
+            return list(session.scalars(statement))
+
+    def hiring_search_terms(self, profiles: list[JobProfile]) -> list[str]:
+        terms: list[str] = []
+        seen: set[str] = set()
+        for profile in profiles:
+            for title in profile.job_titles or []:
+                clean = title.strip()
+                normalized = normalize_for_match(clean)
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                terms.append(clean)
+                if len(terms) >= self.settings.discovery_hiring_max_queries:
+                    return terms
+        return terms
+
+    @staticmethod
+    def _signal_matches_title(signal: HiringSignal, profile: JobProfile) -> bool:
+        signal_tokens = set(normalize_for_match(signal.title).split())
+        if not signal_tokens:
+            return False
+        for title in profile.job_titles or []:
+            wanted = set(normalize_for_match(title).split())
+            if wanted and wanted.issubset(signal_tokens):
+                return True
+        return False
+
+    def _signal_matches_profile(
+        self,
+        signal: HiringSignal,
+        profile: JobProfile,
+        *,
+        now: datetime,
+    ) -> bool:
+        if signal.posted_at is None or not self._signal_matches_title(signal, profile):
+            return False
+        posted_at = signal.posted_at
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=timezone.utc)
+        else:
+            posted_at = posted_at.astimezone(timezone.utc)
+        if posted_at > now + timedelta(days=1):
+            return False
+        max_age = self.settings.discovery_hiring_max_age_days
+        if profile.max_job_age_days is not None:
+            max_age = min(max_age, profile.max_job_age_days)
+        return posted_at >= now - timedelta(days=max_age)
+
+    @staticmethod
+    def _wide_job_fingerprint(signal: HiringSignal) -> str:
+        raw = f"wide|{signal.source}|{signal.external_id}".encode()
+        return hashlib.sha256(raw).hexdigest()
+
+    def _relevant_hiring_signals(
+        self,
+        signals: list[HiringSignal],
+        *,
+        profiles: list[JobProfile],
+    ) -> list[HiringSignal]:
+        if not profiles:
+            return []
+        now = datetime.now(timezone.utc)
+        relevant: list[HiringSignal] = []
+        for signal in signals:
+            if len(signal.url) > 2000:
+                continue
+            if any(self._signal_matches_profile(signal, profile, now=now) for profile in profiles):
+                relevant.append(signal)
+                if len(relevant) >= self.settings.discovery_hiring_max_signals_per_run:
+                    break
+        return relevant
+
+    def ingest_hiring_signal_jobs(
+        self,
+        signals: list[HiringSignal],
+        *,
+        profiles: list[JobProfile],
+    ) -> dict[str, int | list[uuid.UUID]]:
+        """Persist fresh WIDE jobs before direct ATS resolution.
+
+        Phase 7C intentionally makes the job the primary discovery object. A supported
+        direct ATS company can be attached later; failure to resolve the employer must
+        not hide a credible current opportunity from WIDE profiles.
+        """
+        relevant = self._relevant_hiring_signals(signals, profiles=profiles)
+        summary = {
+            "signals_relevant": len(relevant),
+            "jobs_new": 0,
+            "jobs_updated": 0,
+            "jobs_existing": 0,
+            "matches_created": 0,
+            "notifications_queued": 0,
+            "_notification_ids": [],
+        }
+        if not relevant:
+            return summary
+
+        now = datetime.now(timezone.utc)
+        profile_ids = [profile.id for profile in profiles]
+        touched_ids: list[uuid.UUID] = []
+        new_ids: list[uuid.UUID] = []
+        with Session(self.engine, expire_on_commit=False) as session:
+            for signal in relevant:
+                source_provider = signal.source[:100]
+                source_external_id = signal.external_id[:500]
+                job = session.scalar(
+                    select(Job).where(
+                        Job.source_provider == source_provider,
+                        Job.source_external_id == source_external_id,
+                    )
+                )
+                company_name = (signal.company_name or signal.company_slug or "Unknown company")[:255]
+                work_mode = WorkMode.REMOTE if signal.remote is True else WorkMode.UNKNOWN
+                employment_type = (signal.employment_type or "").strip()[:100] or None
+                description = signal.description
+                if job is None:
+                    job = Job(
+                        company_id=None,
+                        ats_provider=None,
+                        external_job_id=None,
+                        title=signal.title[:500],
+                        description=description,
+                        location=(signal.location or "")[:500] or None,
+                        work_mode=work_mode,
+                        employment_type=employment_type,
+                        apply_url=signal.url[:2000],
+                        source_url=signal.url[:2000],
+                        posted_at=signal.posted_at,
+                        discovery_signal_at=signal.posted_at,
+                        discovery_signal_source=source_provider,
+                        source_kind="WIDE_DISCOVERY",
+                        source_provider=source_provider,
+                        source_external_id=source_external_id,
+                        source_company_name=company_name,
+                        baseline_imported=False,
+                        first_seen_at=now,
+                        last_seen_at=now,
+                        missing_count=0,
+                        status=JobStatus.ACTIVE,
+                        fingerprint=self._wide_job_fingerprint(signal),
+                    )
+                    session.add(job)
+                    session.flush()
+                    summary["jobs_new"] += 1
+                    new_ids.append(job.id)
+                else:
+                    changed = False
+                    updates = {
+                        "title": signal.title[:500],
+                        "description": description,
+                        "location": (signal.location or "")[:500] or None,
+                        "work_mode": work_mode,
+                        "employment_type": employment_type,
+                        "apply_url": signal.url[:2000],
+                        "source_url": signal.url[:2000],
+                        "posted_at": signal.posted_at,
+                        "discovery_signal_at": signal.posted_at,
+                        "discovery_signal_source": source_provider,
+                        "source_company_name": company_name,
+                    }
+                    for field, value in updates.items():
+                        current_value = getattr(job, field)
+                        if isinstance(current_value, datetime) and isinstance(value, datetime):
+                            left = current_value if current_value.tzinfo else current_value.replace(tzinfo=timezone.utc)
+                            right = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+                            same = left.astimezone(timezone.utc) == right.astimezone(timezone.utc)
+                        else:
+                            same = current_value == value
+                        if not same:
+                            setattr(job, field, value)
+                            changed = True
+                    job.last_seen_at = now
+                    job.status = JobStatus.ACTIVE
+                    job.closed_at = None
+                    if changed:
+                        summary["jobs_updated"] += 1
+                    else:
+                        summary["jobs_existing"] += 1
+                touched_ids.append(job.id)
+
+            match_result = create_matches_for_jobs(
+                session,
+                job_ids=touched_ids,
+                profile_ids=profile_ids,
+            )
+            summary["matches_created"] = match_result.created
+            if new_ids and match_result.match_ids:
+                new_match_ids = list(
+                    session.scalars(
+                        select(JobMatch.id).where(
+                            JobMatch.id.in_(match_result.match_ids),
+                            JobMatch.job_id.in_(new_ids),
+                        )
+                    )
+                )
+                notification_ids = enqueue_match_notifications(session, match_ids=new_match_ids)
+                summary["notifications_queued"] = len(notification_ids)
+                summary["_notification_ids"] = notification_ids
+            session.commit()
+        return summary
+
+    @classmethod
+    def _slugify_company_identifier(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+        slug = re.sub(r"[^a-z0-9]+", "-", normalized.casefold()).strip("-")
+        return slug or None
+
+    @classmethod
+    def _company_identifier_guesses(
+        cls,
+        signal: HiringSignal,
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Return a small, deterministic set of plausible public ATS tenant slugs.
+
+        Hiring indexes expose company identity but often intentionally keep their own
+        application URL. We therefore probe supported ATS APIs directly instead of
+        crawling the index's HTML page. Guesses are always corroborated against the
+        signal job title before promotion, so a slug collision cannot silently add an
+        unrelated employer.
+        """
+        guesses: list[str] = []
+        seen: set[str] = set()
+
+        def add(value: str | None) -> None:
+            slug = cls._slugify_company_identifier(value)
+            if not slug or slug in seen or len(guesses) >= limit:
+                return
+            seen.add(slug)
+            guesses.append(slug)
+
+        bases = [signal.company_slug, signal.company_name]
+        for base in bases:
+            slug = cls._slugify_company_identifier(base)
+            if not slug:
+                continue
+            add(slug)
+            tokens = slug.split("-")
+            while tokens and tokens[-1] in cls._CORPORATE_SUFFIXES:
+                tokens.pop()
+            stripped = "-".join(tokens)
+            add(stripped)
+            add(stripped.replace("-", "") if stripped else None)
+            if len(guesses) >= limit:
+                break
+        return guesses
+
+    def _hiring_probe_sources(self, signal: HiringSignal) -> list[DetectedSource]:
+        """Resolve a signal to exact or bounded guessed direct ATS sources.
+
+        Crucially, aggregator job URLs (for example Himalayas application pages) are
+        never sent to the HTML crawler. Himalayas documents applicationLink as a
+        Himalayas application page, so crawling it is both unnecessary and commonly
+        blocked with HTTP 403.
+        """
+        exact: dict[tuple[ATSProvider, str], DetectedSource] = {}
+        direct = detect_ats_source(signal.url)
+        if direct is not None:
+            exact[(direct.provider, direct.identifier)] = direct
+        for source in signal.ats_sources:
+            exact[(source.provider, source.identifier)] = source
+        if exact:
+            return list(exact.values())
+
+        providers = list(signal.provider_hints) or [
+            ATSProvider.GREENHOUSE,
+            ATSProvider.ASHBY,
+            ATSProvider.LEVER,
+        ]
+        guesses = self._company_identifier_guesses(
+            signal,
+            limit=self.settings.discovery_hiring_max_identifier_guesses,
+        )
+        results: list[DetectedSource] = []
+        for identifier in guesses:
+            for provider in providers:
+                if provider is ATSProvider.GREENHOUSE:
+                    career_url = f"https://boards.greenhouse.io/{identifier}"
+                elif provider is ATSProvider.ASHBY:
+                    career_url = f"https://jobs.ashbyhq.com/{identifier}"
+                else:
+                    career_url = f"https://jobs.lever.co/{identifier}"
+                results.append(
+                    DetectedSource(
+                        provider=provider,
+                        identifier=identifier,
+                        career_url=career_url,
+                        source_url=career_url,
+                    )
+                )
+        return results
+
+    def _stage_hiring_candidate(
+        self,
+        session: Session,
+        *,
+        target: DiscoveryTarget,
+        source: DetectedSource,
+    ) -> tuple[bool, bool]:
+        """Create/link one direct ATS candidate. Returns (created, linked)."""
+        company = session.scalar(
+            select(Company).where(
+                Company.ats_provider == source.provider,
+                Company.ats_identifier == source.identifier,
+            )
+        )
+        candidate = session.scalar(
+            select(SourceCandidate).where(
+                SourceCandidate.ats_provider == source.provider,
+                SourceCandidate.ats_identifier == source.identifier,
+            )
+        )
+        created = False
+        if candidate is None:
+            candidate = SourceCandidate(
+                discovery_target_id=target.id,
+                name_hint=target.company_name_hint,
+                ats_provider=source.provider,
+                ats_identifier=source.identifier,
+                career_url=source.career_url,
+                source_url=source.source_url,
+                status=(
+                    DiscoveryCandidateStatus.VALID
+                    if company is not None
+                    else DiscoveryCandidateStatus.DISCOVERED
+                ),
+                promoted_company_id=company.id if company is not None else None,
+                promoted_at=datetime.now(timezone.utc) if company is not None else None,
+            )
+            session.add(candidate)
+            session.flush()
+            created = True
+        elif company is not None and candidate.promoted_company_id is None:
+            # A company may already be present from the starter/system registry even
+            # when an older speculative probe for the same tenant was invalid. The
+            # registry identity is authoritative here, so attach the signal to that
+            # known company instead of leaving freshness evidence stranded.
+            candidate.status = DiscoveryCandidateStatus.VALID
+            candidate.promoted_company_id = company.id
+            candidate.promoted_at = datetime.now(timezone.utc)
+            candidate.career_url = company.career_url
+            candidate.error_type = None
+            candidate.error_message = None
+            session.flush()
+
+        link = session.get(DiscoveryTargetCandidate, (target.id, candidate.id))
+        linked = False
+        if link is None:
+            session.add(
+                DiscoveryTargetCandidate(
+                    discovery_target_id=target.id,
+                    source_candidate_id=candidate.id,
+                )
+            )
+            session.flush()
+            linked = True
+
+        if company is not None:
+            self._extend_hiring_boost(company, target)
+        return created, linked
+
+    def queue_hiring_signals(
+        self,
+        signals: list[HiringSignal],
+        *,
+        profiles: list[JobProfile],
+    ) -> dict[str, int]:
+        summary = {
+            "signals_seen": len(signals),
+            "signals_relevant": 0,
+            "targets_queued": 0,
+            "targets_existing": 0,
+            "targets_resolved": 0,
+            "probe_candidates_staged": 0,
+            "probe_candidates_existing": 0,
+        }
+        if not profiles:
+            return summary
+        now = datetime.now(timezone.utc)
+        with Session(self.engine, expire_on_commit=False) as session:
+            for signal in signals:
+                if len(signal.url) > 1500 or not any(
+                    self._signal_matches_profile(signal, profile, now=now) for profile in profiles
+                ):
+                    continue
+                if summary["signals_relevant"] >= self.settings.discovery_hiring_max_signals_per_run:
+                    break
+                summary["signals_relevant"] += 1
+                source_label = f"hiring-signal:{signal.source}"[:255]
+                existing = session.scalar(
+                    select(DiscoveryTarget)
+                    .where(
+                        DiscoveryTarget.origin == DiscoveryTargetOrigin.SYSTEM_FEED,
+                        DiscoveryTarget.source_label == source_label,
+                        DiscoveryTarget.signal_external_id == signal.external_id[:500],
+                    )
+                    .order_by(DiscoveryTarget.created_at.desc())
+                )
+                if existing is None:
+                    target = DiscoveryTarget(
+                        submitted_by_user_id=None,
+                        url=signal.url,
+                        company_name_hint=signal.company_name,
+                        auto_watch=False,
+                        origin=DiscoveryTargetOrigin.SYSTEM_FEED,
+                        source_label=source_label,
+                        signal_external_id=signal.external_id[:500],
+                        job_title_hint=signal.title[:500],
+                        job_location_hint=(signal.location or "")[:500] or None,
+                        job_posted_at_hint=signal.posted_at,
+                        # Phase 7 hiring signals are resolved directly to ATS probes;
+                        # the public index page itself is provenance, not a crawl target.
+                        status=DiscoveryTargetStatus.COMPLETE,
+                    )
+                    session.add(target)
+                    session.flush()
+                    summary["targets_queued"] += 1
+                else:
+                    target = existing
+                    target.url = signal.url
+                    target.company_name_hint = signal.company_name or target.company_name_hint
+                    target.job_title_hint = signal.title[:500]
+                    target.job_location_hint = (signal.location or "")[:500] or None
+                    target.job_posted_at_hint = signal.posted_at
+                    summary["targets_existing"] += 1
+
+                sources = self._hiring_probe_sources(signal)
+                for source in sources:
+                    existing_candidate_id = session.scalar(
+                        select(SourceCandidate.id).where(
+                            SourceCandidate.ats_provider == source.provider,
+                            SourceCandidate.ats_identifier == source.identifier,
+                        )
+                    )
+                    if (
+                        existing_candidate_id is None
+                        and summary["probe_candidates_staged"]
+                        >= self.settings.discovery_hiring_max_probe_candidates_per_run
+                    ):
+                        continue
+                    created, linked = self._stage_hiring_candidate(
+                        session,
+                        target=target,
+                        source=source,
+                    )
+                    if created:
+                        summary["probe_candidates_staged"] += 1
+                    else:
+                        summary["probe_candidates_existing"] += 1
+
+                # Repair targets created by the original Phase 7 implementation.
+                # Those targets pointed at Himalayas/Arbeitnow HTML and commonly
+                # ended as HTTP 403/timeout failures. They now become completed
+                # provenance records linked to direct ATS candidates.
+                target.status = DiscoveryTargetStatus.COMPLETE
+                target.last_scanned_at = now
+                target.pages_scanned = 0
+                target.sources_found = int(
+                    session.scalar(
+                        select(func.count(DiscoveryTargetCandidate.source_candidate_id)).where(
+                            DiscoveryTargetCandidate.discovery_target_id == target.id
+                        )
+                    )
+                    or 0
+                )
+                target.error_type = None
+                target.error_message = None
+                summary["targets_resolved"] += 1
+            session.commit()
+        return summary
+
+    async def ingest_hiring_signals(
+        self, *, user_id: uuid.UUID | None = None
+    ) -> dict[str, int | list[str] | list[uuid.UUID]]:
+        profiles = self.active_wide_profiles(user_id=user_id)
+        terms = self.hiring_search_terms(profiles)
+        summary: dict[str, int | list[str] | list[uuid.UUID]] = {
+            "profiles": len(profiles),
+            "queries": len(terms),
+            "signals_seen": 0,
+            "signals_relevant": 0,
+            "jobs_new": 0,
+            "jobs_updated": 0,
+            "jobs_existing": 0,
+            "matches_created": 0,
+            "notifications_queued": 0,
+            "targets_queued": 0,
+            "targets_existing": 0,
+            "targets_resolved": 0,
+            "probe_candidates_staged": 0,
+            "probe_candidates_existing": 0,
+            "provider_failed": 0,
+            "provider_warnings": [],
+            "_notification_ids": [],
+        }
+        if not profiles or not terms:
+            return summary
+
+        provider = self._hiring_provider_factory(self.settings)
+        try:
+            signals = await provider.fetch(search_terms=terms)
+        except Exception as exc:
+            logger.warning(
+                "profile-driven hiring signal ingestion unavailable: %s: %s",
+                exc.__class__.__name__,
+                str(exc) or repr(exc),
+            )
+            summary["provider_failed"] = 1
+            summary["provider_warnings"] = [
+                f"provider: {exc.__class__.__name__}: {str(exc) or repr(exc)}"[:500]
+            ]
+            return summary
+        finally:
+            try:
+                await provider.close()
+            except Exception as exc:
+                logger.warning("hiring signal provider close failed: %s", exc)
+
+        failures = list(getattr(provider, "failed_sources", []) or [])
+        summary["provider_failed"] = len(failures)
+        summary["provider_warnings"] = failures
+        summary["signals_seen"] = len(signals)
+
+        job_summary = self.ingest_hiring_signal_jobs(signals, profiles=profiles)
+        summary["signals_relevant"] = job_summary["signals_relevant"]
+        for key in (
+            "jobs_new",
+            "jobs_updated",
+            "jobs_existing",
+            "matches_created",
+            "notifications_queued",
+        ):
+            summary[key] = job_summary[key]
+        summary["_notification_ids"] = list(job_summary.get("_notification_ids", []))
+
+        # ATS resolution remains a parallel upgrade path. These targets/candidates are
+        # staged after jobs are already usable, so an unresolved company never blocks WIDE.
+        queued = self.queue_hiring_signals(signals, profiles=profiles)
+        for key in (
+            "targets_queued",
+            "targets_existing",
+            "targets_resolved",
+            "probe_candidates_staged",
+            "probe_candidates_existing",
+        ):
+            summary[key] = queued[key]
+        return summary
+
     def candidate_ids_for_revalidation(self, *, limit: int) -> list[uuid.UUID]:
         due_before = datetime.now(timezone.utc) - timedelta(days=self.settings.discovery_revalidate_days)
         with Session(self.engine) as session:
@@ -465,7 +1179,10 @@ class DiscoveryService:
         now = datetime.now(timezone.utc)
         try:
             collector = self.collector_factory(provider, self.settings)
-            jobs = await collector.fetch_jobs(target)
+            jobs = await asyncio.wait_for(
+                collector.fetch_jobs(target),
+                timeout=self.settings.discovery_candidate_total_timeout_seconds,
+            )
         except Exception as exc:
             with Session(self.engine) as session:
                 candidate = session.get(SourceCandidate, candidate_id)
@@ -577,6 +1294,7 @@ class DiscoveryService:
         max_concurrency: int,
         auto_promote: bool,
         ingest_system_feeds: bool = False,
+        ingest_hiring_signals: bool = False,
         revalidate_promoted: bool = False,
         revalidate_batch_size: int | None = None,
     ) -> dict[str, int]:
@@ -594,6 +1312,22 @@ class DiscoveryService:
             "system_entries_seen": 0,
             "system_targets_queued": 0,
             "system_entries_existing": 0,
+            "hiring_profiles": 0,
+            "hiring_queries": 0,
+            "hiring_signals_seen": 0,
+            "hiring_signals_relevant": 0,
+            "wide_jobs_new": 0,
+            "wide_jobs_updated": 0,
+            "wide_jobs_existing": 0,
+            "wide_matches_created": 0,
+            "wide_notifications_queued": 0,
+            "wide_notifications_sent": 0,
+            "hiring_targets_queued": 0,
+            "hiring_targets_existing": 0,
+            "hiring_targets_resolved": 0,
+            "hiring_probe_candidates_staged": 0,
+            "hiring_probe_candidates_existing": 0,
+            "hiring_provider_failed": 0,
             "revalidation_selected": 0,
             "revalidated": 0,
             "revalidation_failed": 0,
@@ -606,6 +1340,35 @@ class DiscoveryService:
             summary["system_entries_seen"] = feed_summary["entries_seen"]
             summary["system_targets_queued"] = feed_summary["targets_queued"]
             summary["system_entries_existing"] = feed_summary["entries_existing"]
+
+        if ingest_hiring_signals and self.settings.discovery_hiring_signals_enabled:
+            hiring_summary = await self.ingest_hiring_signals()
+            summary["hiring_profiles"] = hiring_summary["profiles"]
+            summary["hiring_queries"] = hiring_summary["queries"]
+            summary["hiring_signals_seen"] = hiring_summary["signals_seen"]
+            summary["hiring_signals_relevant"] = int(hiring_summary["signals_relevant"])
+            summary["wide_jobs_new"] = int(hiring_summary["jobs_new"])
+            summary["wide_jobs_updated"] = int(hiring_summary["jobs_updated"])
+            summary["wide_jobs_existing"] = int(hiring_summary["jobs_existing"])
+            summary["wide_matches_created"] = int(hiring_summary["matches_created"])
+            summary["wide_notifications_queued"] = int(hiring_summary["notifications_queued"])
+            notification_ids = list(hiring_summary.get("_notification_ids", []))
+            if notification_ids:
+                summary["wide_notifications_sent"] = await deliver_pending_notifications(
+                    engine=self.engine,
+                    settings=self.settings,
+                    notification_ids=notification_ids,
+                )
+            summary["hiring_targets_queued"] = int(hiring_summary["targets_queued"])
+            summary["hiring_targets_existing"] = hiring_summary["targets_existing"]
+            summary["hiring_targets_resolved"] = hiring_summary["targets_resolved"]
+            summary["hiring_probe_candidates_staged"] = hiring_summary[
+                "probe_candidates_staged"
+            ]
+            summary["hiring_probe_candidates_existing"] = hiring_summary[
+                "probe_candidates_existing"
+            ]
+            summary["hiring_provider_failed"] = hiring_summary["provider_failed"]
 
         target_ids = self.pending_target_ids(limit=target_batch_size)
         summary["targets_selected"] = len(target_ids)
@@ -723,6 +1486,39 @@ def discovery_summary(session: Session) -> dict[str, int]:
         )
         or 0
     )
+    hiring_signal_targets = int(
+        session.scalar(
+            select(func.count())
+            .select_from(DiscoveryTarget)
+            .where(DiscoveryTarget.job_title_hint.is_not(None))
+        )
+        or 0
+    )
+    hiring_signal_promoted_sources = int(
+        session.scalar(
+            select(func.count(func.distinct(SourceCandidate.id)))
+            .select_from(SourceCandidate)
+            .join(
+                DiscoveryTargetCandidate,
+                DiscoveryTargetCandidate.source_candidate_id == SourceCandidate.id,
+            )
+            .join(
+                DiscoveryTarget,
+                DiscoveryTarget.id == DiscoveryTargetCandidate.discovery_target_id,
+            )
+            .where(
+                DiscoveryTarget.job_title_hint.is_not(None),
+                SourceCandidate.promoted_company_id.is_not(None),
+            )
+        )
+        or 0
+    )
+    fresh_signal_jobs = int(
+        session.scalar(
+            select(func.count()).select_from(Job).where(Job.discovery_signal_at.is_not(None))
+        )
+        or 0
+    )
     return {
         "pending_targets": count_targets(DiscoveryTargetStatus.PENDING),
         "failed_targets": count_targets(DiscoveryTargetStatus.FAILED),
@@ -733,4 +1529,7 @@ def discovery_summary(session: Session) -> dict[str, int]:
         "system_targets": system_targets,
         "system_promoted_candidates": system_promoted,
         "revalidation_failures": revalidation_failures,
+        "hiring_signal_targets": hiring_signal_targets,
+        "hiring_signal_promoted_sources": hiring_signal_promoted_sources,
+        "fresh_signal_jobs": fresh_signal_jobs,
     }

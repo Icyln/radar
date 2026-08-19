@@ -235,14 +235,18 @@ def test_discovery_api_is_authenticated_and_user_scoped(client) -> None:
 def test_phase6_discovery_workflow_is_bounded_and_database_only() -> None:
     workflow = Path(__file__).parents[2] / ".github" / "workflows" / "discovery.yml"
     text = workflow.read_text(encoding="utf-8")
-    assert 'cron: "23 3 * * *"' in text
+    assert 'cron: "23 0 * * *"' in text
+    assert 'cron: "23 6 * * *"' in text
     assert "workflow_dispatch:" in text
     assert "secrets.DATABASE_URL" in text
-    assert "TELEGRAM_BOT_TOKEN" not in text
+    # Phase 7D allows the discovery worker to deliver newly ingested Wide matches
+    # immediately. Earlier Phase-6 discovery was database-only.
+    assert "TELEGRAM_BOT_TOKEN" in text
     assert "--target-batch-size 25" in text
     assert "--candidate-batch-size 50" in text
     assert "--max-concurrency 3" in text
     assert "--auto-promote" in text
+    assert "--ingest-hiring-signals" in text
 
 async def test_discovery_rejects_private_network_urls() -> None:
     from app.discovery.security import UnsafeDiscoveryUrl, ensure_public_url
@@ -544,3 +548,41 @@ def test_phase6b_old_invalid_system_candidate_becomes_retryable(engine, settings
 
     service = DiscoveryService(engine=engine, settings=settings)
     assert candidate_id in service.candidate_ids_for_validation(limit=10)
+
+async def test_discovery_target_scan_has_total_timeout(engine, settings) -> None:
+    import asyncio
+
+    class SlowCrawler:
+        def __init__(self) -> None:
+            self.fetcher = FakeFetcher()
+
+        async def scan(self, url: str, *, max_pages: int):
+            await asyncio.sleep(1)
+            return DiscoveryScanResult([], 0, None)
+
+    with Session(engine, expire_on_commit=False) as session:
+        target = DiscoveryTarget(
+            url="https://slow.example/careers",
+            company_name_hint="Slow Example",
+        )
+        session.add(target)
+        session.commit()
+        target_id = target.id
+
+    bounded_settings = settings.model_copy(
+        update={"discovery_target_total_timeout_seconds": 0.01}
+    )
+    service = DiscoveryService(
+        engine=engine,
+        settings=bounded_settings,
+        crawler_factory=SlowCrawler,
+    )
+
+    assert await service.scan_target(target_id) == "failed"
+
+    with Session(engine) as session:
+        target = session.get(DiscoveryTarget, target_id)
+        assert target is not None
+        assert target.status is DiscoveryTargetStatus.FAILED
+        assert target.error_type == "TimeoutError"
+        assert "total timeout" in (target.error_message or "")

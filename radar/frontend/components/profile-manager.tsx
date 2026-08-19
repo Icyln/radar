@@ -12,15 +12,6 @@ import type {
 } from "@/types/api";
 
 const modes: WorkMode[] = ["REMOTE", "HYBRID", "ONSITE", "UNKNOWN"];
-const blank: JobProfilePayload = {
-  name: "",
-  enabled: true,
-  coverage_mode: "WIDE",
-  job_titles: [],
-  locations: [],
-  work_modes: [],
-  excluded_keywords: []
-};
 const split = (value: string) => value.split(",").map((v) => v.trim()).filter(Boolean);
 
 interface Draft {
@@ -31,6 +22,8 @@ interface Draft {
   excluded: string;
   enabled: boolean;
   coverageMode: ProfileCoverageMode;
+  maxJobAgeDays: number | null;
+  includeUnknownPostedAt: boolean;
 }
 
 function toDraft(profile: JobProfile | null): Draft {
@@ -42,7 +35,9 @@ function toDraft(profile: JobProfile | null): Draft {
       workModes: [],
       excluded: "",
       enabled: true,
-      coverageMode: "WIDE"
+      coverageMode: "WIDE",
+      maxJobAgeDays: 30,
+      includeUnknownPostedAt: false
     };
   }
   return {
@@ -52,7 +47,9 @@ function toDraft(profile: JobProfile | null): Draft {
     workModes: profile.work_modes,
     excluded: profile.excluded_keywords.join(", "),
     enabled: profile.enabled,
-    coverageMode: profile.coverage_mode
+    coverageMode: profile.coverage_mode,
+    maxJobAgeDays: profile.max_job_age_days,
+    includeUnknownPostedAt: profile.include_unknown_posted_at
   };
 }
 
@@ -91,7 +88,9 @@ export function ProfileManager({
     job_titles: split(draft.titles),
     locations: split(draft.locations),
     work_modes: draft.workModes,
-    excluded_keywords: split(draft.excluded)
+    excluded_keywords: split(draft.excluded),
+    max_job_age_days: draft.maxJobAgeDays,
+    include_unknown_posted_at: draft.includeUnknownPostedAt
   }), [draft]);
 
   async function submit(event: FormEvent) {
@@ -155,7 +154,7 @@ export function ProfileManager({
                 {editing ? "Edit profile" : "Create monitoring profile"}
               </h2>
               <p className="mt-1 text-xs text-zinc-500">
-                Matching stays deterministic; coverage controls which company sources this profile can match.
+                Matching stays deterministic; Wide Search can match fresh jobs even before Radar adds the employer to its registry.
               </p>
             </div>
             <button type="button" className="button-ghost" onClick={() => setShowForm(false)}>Cancel</button>
@@ -182,7 +181,7 @@ export function ProfileManager({
               <label className={`cursor-pointer rounded-xl border p-4 ${draft.coverageMode === "WIDE" ? "border-emerald-700 bg-emerald-950/20" : "border-zinc-800 bg-zinc-950/40"}`}>
                 <div className="flex items-start gap-3">
                   <input type="radio" name="coverage" className="mt-1 accent-emerald-400" checked={draft.coverageMode === "WIDE"} onChange={() => setDraft({ ...draft, coverageMode: "WIDE" })} />
-                  <div><p className="text-sm font-medium text-zinc-100">Wide Search</p><p className="mt-1 text-xs leading-5 text-zinc-500">Match against every active source in Radar&apos;s company registry.</p></div>
+                  <div><p className="text-sm font-medium text-zinc-100">Wide Search</p><p className="mt-1 text-xs leading-5 text-zinc-500">Find fresh matching jobs across Radar’s discovery feeds and direct ATS registry. Employers do not need to be on your watchlist or already registered.</p></div>
                 </div>
               </label>
               <label className={`cursor-pointer rounded-xl border p-4 ${draft.coverageMode === "WATCHLIST" ? "border-emerald-700 bg-emerald-950/20" : "border-zinc-800 bg-zinc-950/40"}`}>
@@ -195,6 +194,42 @@ export function ProfileManager({
             {draft.coverageMode === "WATCHLIST" && watchlistCount === 0 ? (
               <p className="mt-2 text-xs text-amber-300">Your watchlist is empty. Add companies on the Companies page before this profile can match jobs.</p>
             ) : null}
+          </fieldset>
+
+          <fieldset className="mt-5">
+            <legend className="field-label">Freshness</legend>
+            <div className="mt-2 grid gap-3 md:grid-cols-2">
+              <label className="field-label">Maximum job age
+                <select
+                  className="input mt-2"
+                  value={draft.maxJobAgeDays === null ? "any" : String(draft.maxJobAgeDays)}
+                  onChange={(e) => setDraft({ ...draft, maxJobAgeDays: e.target.value === "any" ? null : Number(e.target.value) })}
+                >
+                  <option value="1">Last 24 hours</option>
+                  <option value="3">Last 3 days</option>
+                  <option value="7">Last 7 days</option>
+                  <option value="14">Last 14 days</option>
+                  <option value="30">Last 30 days</option>
+                  <option value="60">Last 60 days</option>
+                  <option value="90">Last 90 days</option>
+                  <option value="any">Any age</option>
+                </select>
+              </label>
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
+                <p className="text-sm font-medium text-zinc-100">Unknown posting dates</p>
+                <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-zinc-400">
+                  <input
+                    type="checkbox"
+                    className="mt-1 accent-emerald-400"
+                    checked={draft.includeUnknownPostedAt}
+                    disabled={draft.maxJobAgeDays === null}
+                    onChange={(e) => setDraft({ ...draft, includeUnknownPostedAt: e.target.checked })}
+                  />
+                  Include baseline jobs when the ATS does not expose a reliable posting date. These may be older than your freshness window.
+                </label>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">New jobs detected after Radar has baselined a company can use their first-seen time when the ATS omits a posting timestamp. Baseline inventory with no date stays unknown.</p>
           </fieldset>
 
           <fieldset className="mt-5">
@@ -227,6 +262,7 @@ export function ProfileManager({
                   <h2 className="font-semibold text-zinc-100">{profile.name}</h2>
                   <Badge tone={profile.enabled ? "success" : "neutral"}>{profile.enabled ? "Enabled" : "Paused"}</Badge>
                   <Badge tone={profile.coverage_mode === "WIDE" ? "info" : "neutral"}>{profile.coverage_mode === "WIDE" ? "Wide search" : "Watchlist"}</Badge>
+                  <Badge>{profile.max_job_age_days === null ? "Any age" : `≤ ${profile.max_job_age_days}d`}</Badge>
                 </div>
                 <p className="mt-2 text-xs text-zinc-500">{profile.job_titles.join(" · ")}</p>
               </div>

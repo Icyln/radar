@@ -1,18 +1,28 @@
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
+from app.models.company import Company
+from app.models.job import Job
+from app.models.job_match import JobMatch
+from app.models.notification import Notification
 from app.models.telegram_connection import TelegramConnection
 from app.models.user import User
-from app.models.enums import UserJobStateType
-from app.notifications.telegram import TelegramClient, TelegramError
-from app.schemas.telegram import TelegramConnectionRead, TelegramLinkResponse
+from app.models.enums import NotificationChannel, NotificationStatus, UserJobStateType
+from app.notifications.telegram import TelegramClient, TelegramError, format_job_message
+from app.schemas.telegram import (
+    TelegramConnectionRead,
+    TelegramDeliveryStatus,
+    TelegramLinkResponse,
+    TelegramTestResponse,
+)
 from app.services.telegram_linking import TelegramLinkError, consume_link_token, create_link_token
 from app.services.user_job_states import JobStateError, set_job_state
 
@@ -55,6 +65,80 @@ def connection(
 ) -> TelegramConnection | None:
     return session.scalar(
         select(TelegramConnection).where(TelegramConnection.user_id == user.id)
+    )
+
+
+@router.get("/delivery-status", response_model=TelegramDeliveryStatus)
+def delivery_status(
+    user: User = Depends(current_user), session: Session = Depends(get_db)
+) -> TelegramDeliveryStatus:
+    today = datetime.now(timezone.utc).date()
+    rows = session.execute(
+        select(Notification.status, func.count(Notification.id))
+        .where(
+            Notification.user_id == user.id,
+            Notification.channel == NotificationChannel.TELEGRAM,
+            func.date(Notification.created_at) == today,
+        )
+        .group_by(Notification.status)
+    ).all()
+    counts = {status: int(count) for status, count in rows}
+    return TelegramDeliveryStatus(
+        sent_today=counts.get(NotificationStatus.SENT, 0),
+        pending=counts.get(NotificationStatus.PENDING, 0) + counts.get(NotificationStatus.SENDING, 0),
+        failed=counts.get(NotificationStatus.FAILED, 0),
+    )
+
+
+@router.post("/test", response_model=TelegramTestResponse)
+async def test_alert(
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> TelegramTestResponse:
+    connection = session.scalar(
+        select(TelegramConnection).where(
+            TelegramConnection.user_id == user.id,
+            TelegramConnection.verified.is_(True),
+        )
+    )
+    if connection is None:
+        raise HTTPException(status_code=409, detail="Connect Telegram before sending a test alert")
+    recent = session.execute(
+        select(Job, Company.name)
+        .join(JobMatch, JobMatch.job_id == Job.id)
+        .outerjoin(Company, Company.id == Job.company_id)
+        .where(JobMatch.user_id == user.id)
+        .order_by(JobMatch.matched_at.desc())
+        .limit(1)
+    ).one_or_none()
+    if recent is None:
+        preview = (
+            "✅ Radar Telegram test\n\n"
+            "Your Telegram connection is working. New matching Direct ATS and Wide Search "
+            "jobs can be delivered to this chat."
+        )
+    else:
+        job, company_name = recent
+        resolved_name = company_name or job.source_company_name or "Unknown company"
+        preview = "🧪 RADAR ALERT PREVIEW — this is not a new alert\n\n" + format_job_message(
+            job, resolved_name
+        )
+
+    client = _client(settings)
+    try:
+        result = await client.send_text(
+            chat_id=str(connection.telegram_chat_id),
+            text=preview,
+        )
+    except TelegramError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        await client.close()
+    return TelegramTestResponse(
+        ok=True,
+        message="Alert preview sent. Check your Telegram chat.",
+        telegram_message_id=result.message_id,
     )
 
 

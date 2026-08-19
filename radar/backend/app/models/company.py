@@ -14,6 +14,7 @@ class Company(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("ats_provider", "ats_identifier", name="uq_company_provider_identifier"),
         Index("ix_companies_monitoring", "active", "monitoring_priority", "last_checked_at"),
+        Index("ix_companies_discovery_boost", "active", "discovery_boost_until"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -28,6 +29,7 @@ class Company(TimestampMixin, Base):
         nullable=False,
     )
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    discovery_boost_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_successful_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -1,4 +1,4 @@
-# Monitoring — Phase 1 through Phase 5
+# Monitoring and discovery — Phase 1 through Phase 6
 
 Radar uses one reusable Python monitoring pipeline for manual execution and GitHub Actions. The worker talks directly to PostgreSQL, ATS providers, and Telegram; it never calls Render/FastAPI.
 
@@ -107,6 +107,26 @@ A Wide profile is evaluated against any active job in the source registry. A Wat
 
 When a user starts watching a company, Radar backfills active jobs from that company against enabled Watchlist profiles. Historical backfill matches are persisted for the dashboard but are not pushed as a notification burst.
 
-## Phase 6 boundary
+## Phase 6 discovery worker
 
-Phase 5 schedules sources already present in `companies`. It does not discover companies absent from the registry. Source candidate discovery, validation, and registry growth belong to Phase 6.
+Phase 6 adds a separate worker:
+
+```bash
+python -m app.workers.discovery --auto-promote
+```
+
+The discovery worker processes queued company/career targets, extracts supported ATS sources with a bounded crawler, validates those candidates using the existing collectors, and promotes only VALID sources into `companies` as LOW priority. It does not persist validation jobs into the `jobs` table; the next normal monitoring run performs canonical job ingestion.
+
+Production discovery is triggered by `.github/workflows/discovery.yml` and by manual workflow dispatch. Phase 7 runs discovery every six hours so fresh profile-driven hiring signals can enter the registry promptly. It requires `DATABASE_URL` but not the Telegram token.
+
+## Phase 6C freshness and alerts
+
+Phase 6C separates current-match freshness from job retention. Old jobs remain in `jobs`; freshness only controls whether an enabled profile currently considers the job a match.
+
+Freshness evidence is provider publication time when available. For providers/jobs without a reliable publication timestamp, `first_seen_at` is accepted only when the job was first detected after the company's initial baseline. Undated baseline inventory remains UNKNOWN.
+
+The monitor now separates new-job matching from updated-job matching. Both may create dashboard `JobMatch` records, but only matches created from `jobs_new` on a non-initial source run are eligible for user Telegram enqueueing. This prevents a title/content update on a long-existing job from masquerading as a newly posted alert.
+
+## Phase 7 active-hiring boost
+
+Fresh Phase-7 signal discoveries keep `LOW` as their stored company priority and receive `discovery_boost_until`. While that timestamp is in the future, the scheduler includes those LOW companies in the effective `NORMAL` tier and excludes them from the LOW tier. When the boost expires, they automatically return to LOW rotation. This improves freshness for currently hiring companies without permanently moving a growing registry onto the higher-cost cadence.

@@ -134,14 +134,26 @@ def _claimable_status(settings: Settings, *, now: datetime):
     )
 
 
-def _claimable_query(settings: Settings, *, now: datetime) -> Select[tuple[Notification]]:
+def _claimable_query(
+    settings: Settings,
+    *,
+    now: datetime,
+    notification_ids: list[uuid.UUID] | None = None,
+    user_id: uuid.UUID | None = None,
+) -> Select[tuple[Notification]]:
+    statement = select(Notification).where(
+        Notification.channel == NotificationChannel.TELEGRAM,
+        _claimable_status(settings, now=now),
+        Notification.attempt_count < settings.telegram_max_attempts,
+    )
+    if notification_ids is not None:
+        if not notification_ids:
+            return statement.where(Notification.id.is_(None))
+        statement = statement.where(Notification.id.in_(notification_ids))
+    if user_id is not None:
+        statement = statement.where(Notification.user_id == user_id)
     return (
-        select(Notification)
-        .where(
-            Notification.channel == NotificationChannel.TELEGRAM,
-            _claimable_status(settings, now=now),
-            Notification.attempt_count < settings.telegram_max_attempts,
-        )
+        statement
         .order_by(Notification.created_at.asc())
         .limit(settings.phase1_max_notifications_per_run)
     )
@@ -152,6 +164,8 @@ async def deliver_pending_notifications(
     engine: Engine,
     settings: Settings,
     telegram_client: TelegramClient | None = None,
+    notification_ids: list[uuid.UUID] | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> int:
     if not settings.telegram_bot_token:
         return 0
@@ -167,7 +181,15 @@ async def deliver_pending_notifications(
         with Session(engine, expire_on_commit=False) as session:
             claim_now = datetime.now(timezone.utc)
             candidate_ids = [
-                item.id for item in session.scalars(_claimable_query(settings, now=claim_now))
+                item.id
+                for item in session.scalars(
+                    _claimable_query(
+                        settings,
+                        now=claim_now,
+                        notification_ids=notification_ids,
+                        user_id=user_id,
+                    )
+                )
             ]
 
         for notification_id in candidate_ids:
@@ -201,14 +223,9 @@ async def deliver_pending_notifications(
                     notification.error_message = "job no longer exists"
                     session.commit()
                     continue
-                company = session.get(Company, job.company_id)
-                if company is None:
-                    notification.status = NotificationStatus.FAILED
-                    notification.error_message = "company no longer exists"
-                    session.commit()
-                    continue
+                company = session.get(Company, job.company_id) if job.company_id is not None else None
+                company_name = (company.name if company is not None else job.source_company_name) or "Unknown company"
                 recipient = notification.recipient
-                company_name = company.name
                 allow_actions = notification.user_id is not None
 
             try:

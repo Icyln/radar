@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { JobCard } from "@/components/job-card";
 import { PageHeader } from "@/components/page-header";
+import { WideSearchRefresh } from "@/components/wide-search-refresh";
 import { serverRequest } from "@/lib/server-api";
 import type {
   ATSProvider,
@@ -42,7 +43,8 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
     const company = first(params.company) ?? "";
     const provider = providers.includes(first(params.provider) as ATSProvider) ? first(params.provider)! : "";
     const mode = workModes.includes(first(params.mode) as WorkMode) ? first(params.mode)! : "";
-    const source = ["all", "watchlist", "other"].includes(first(params.source) ?? "") ? first(params.source)! : "all";
+    const source = ["all", "watchlist", "wide", "direct"].includes(first(params.source) ?? "") ? first(params.source)! : "all";
+    const freshness = ["any", "1", "3", "7", "14", "30", "60", "90", "unknown"].includes(first(params.freshness) ?? "") ? first(params.freshness)! : "30";
     const page = Math.max(1, Number.parseInt(first(params.page) ?? "1", 10) || 1);
     const offset = (page - 1) * pageSize;
     const query = new URLSearchParams({ status, source, limit: String(pageSize), offset: String(offset) });
@@ -50,6 +52,7 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
     if (company.trim()) query.set("company", company.trim());
     if (provider) query.set("provider", provider);
     if (mode) query.set("work_mode", mode);
+    query.set("freshness", freshness);
 
     const result = await serverRequest<DetectedJobPage>(`/api/v1/jobs/detected?${query.toString()}`);
 
@@ -63,6 +66,7 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
       if (provider) next.set("provider", provider);
       if (mode) next.set("mode", mode);
       if (source !== "all") next.set("source", source);
+      if (freshness !== "30") next.set("freshness", freshness);
       return `/jobs?${next.toString()}`;
     }
 
@@ -72,7 +76,7 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
       <form method="get" action="/jobs" className="mb-5 panel p-4">
         <input type="hidden" name="view" value="detected" />
         <input type="hidden" name="status" value={status} />
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <label className="field-label">Search
             <input className="input mt-2" type="search" name="q" defaultValue={q} placeholder="Title or company" />
           </label>
@@ -93,9 +97,23 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
           </label>
           <label className="field-label">Source scope
             <select className="input mt-2" name="source" defaultValue={source}>
-              <option value="all">All sources</option>
+              <option value="all">All jobs</option>
               <option value="watchlist">My watchlist</option>
-              <option value="other">Other registry sources</option>
+              <option value="wide">Wide discovery</option>
+              <option value="direct">Other direct ATS</option>
+            </select>
+          </label>
+          <label className="field-label">Freshness
+            <select className="input mt-2" name="freshness" defaultValue={freshness}>
+              <option value="1">Last 24 hours</option>
+              <option value="3">Last 3 days</option>
+              <option value="7">Last 7 days</option>
+              <option value="14">Last 14 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="60">Last 60 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="unknown">Posting date unknown</option>
+              <option value="any">Any time</option>
             </select>
           </label>
         </div>
@@ -112,17 +130,18 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
           <span className="text-xs text-zinc-500">Page {page}</span>
           <Link aria-disabled={!result.has_more} className={!result.has_more ? "button-secondary pointer-events-none opacity-40" : "button-secondary"} href={pageHref(page + 1)}>Next →</Link>
         </div>
-      </> : <EmptyState title={`No detected ${status.toLowerCase()} jobs`} description="No collected jobs match these filters. Detected shows the source registry directly; it does not require a job profile match." />}
+      </> : <EmptyState title={`No detected ${status.toLowerCase()} jobs`} description="No collected jobs match these filters. Detected shows everything Radar collected, including Wide discovery jobs from employers that are not yet in the registry." />}
     </>;
   } else {
     const jobs = await serverRequest<JobListItem[]>(`/api/v1/jobs?view=${view}&status=${status}&limit=100`);
     content = jobs.length
       ? <div className="grid gap-4 xl:grid-cols-2">{jobs.map((job) => <JobCard key={job.id} job={job} />)}</div>
-      : <EmptyState title={`No ${view} ${status.toLowerCase()} jobs`} description="Matched is profile-driven. Saved and Ignored are your personal job states. Use Detected to inspect everything Radar collected from the source registry." />;
+      : <EmptyState title={`No ${view} ${status.toLowerCase()} jobs`} description="Matched is profile-driven and now includes Wide discovery jobs outside the registry. Saved and Ignored are your personal job states." />;
   }
 
   return <>
-    <PageHeader eyebrow="History" title="Jobs" description="Matched jobs stay focused; Detected lets you browse the wider source registry with server-side filters and pagination." />
+    <PageHeader eyebrow="History" title="Jobs" description="Wide Search can surface fresh jobs before Radar knows the employer's direct ATS. Direct ATS jobs remain verified monitoring sources." />
+    <WideSearchRefresh />
     <div className="mb-5 flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-2 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-wrap gap-1">{views.map((item) => <Link key={item} href={tabHref(item, status)} className={item === view ? "tab-active" : "tab"}>{item[0].toUpperCase() + item.slice(1)}</Link>)}</div>
       <div className="flex flex-wrap gap-1">{statuses.map((item) => <Link key={item} href={tabHref(view, item)} className={item === status ? "tab-active" : "tab"}>{titleCase(item)}</Link>)}</div>

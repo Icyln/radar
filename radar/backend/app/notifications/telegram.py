@@ -18,14 +18,23 @@ class TelegramError(Exception):
 
 def format_job_message(job: Job, company_name: str) -> str:
     posted = job.posted_at.isoformat() if job.posted_at else "Not provided by source"
+    if job.source_kind == "WIDE_DISCOVERY":
+        provider = (job.source_provider or job.discovery_signal_source or "Wide Search").replace("-", " ").title()
+        headline = "🔎 NEW WIDE SEARCH MATCH"
+        source = f"Wide discovery · {provider}"
+    else:
+        provider = job.ats_provider.value.title() if job.ats_provider is not None else "Direct ATS"
+        headline = "🚨 NEW DIRECT ATS MATCH"
+        source = f"Direct ATS · {provider}"
     return (
-        "🚨 NEW JOB FOUND\n\n"
+        f"{headline}\n\n"
         f"{job.title}\n"
         f"{company_name}\n\n"
         f"📍 {job.location or 'Location not provided'}\n"
         f"🏠 {job.work_mode.value.title()}\n"
         f"🕒 Posted: {posted}\n"
-        f"📡 Detected: {job.first_seen_at.isoformat()}\n\n"
+        f"📡 Detected: {job.first_seen_at.isoformat()}\n"
+        f"🔗 Source: {source}\n\n"
         f"Apply:\n{job.apply_url}"
     )
 

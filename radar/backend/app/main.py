@@ -17,7 +17,7 @@ configure_logging(settings.log_level)
 
 app = FastAPI(
     title="Radar API",
-    version="0.6.0",
+    version="0.7.3",
     docs_url="/docs" if settings.environment != "production" else None,
 )
 app.add_middleware(

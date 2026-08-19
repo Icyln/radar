@@ -50,6 +50,24 @@ def summary(
         .join(Job, Job.id == JobMatch.job_id)
         .where(JobMatch.user_id == user.id, Job.first_seen_at >= today)
     ) or 0
+    wide_jobs_today = session.scalar(
+        select(func.count(distinct(JobMatch.job_id)))
+        .join(Job, Job.id == JobMatch.job_id)
+        .where(
+            JobMatch.user_id == user.id,
+            Job.first_seen_at >= today,
+            Job.source_kind == "WIDE_DISCOVERY",
+        )
+    ) or 0
+    direct_jobs_today = session.scalar(
+        select(func.count(distinct(JobMatch.job_id)))
+        .join(Job, Job.id == JobMatch.job_id)
+        .where(
+            JobMatch.user_id == user.id,
+            Job.first_seen_at >= today,
+            Job.source_kind == "DIRECT_ATS",
+        )
+    ) or 0
     matches_today = session.scalar(
         select(func.count(JobMatch.id)).where(
             JobMatch.user_id == user.id, JobMatch.matched_at >= today
@@ -68,7 +86,7 @@ def summary(
 
     candidate_rows = session.execute(
         select(Job, Company.name, JobProfile)
-        .join(Company, Company.id == Job.company_id)
+        .outerjoin(Company, Company.id == Job.company_id)
         .join(JobMatch, JobMatch.job_id == Job.id)
         .join(JobProfile, JobProfile.id == JobMatch.job_profile_id)
         .where(JobMatch.user_id == user.id, JobProfile.enabled.is_(True))
@@ -105,7 +123,8 @@ def summary(
         JobListItem(
             id=job.id,
             company_id=job.company_id,
-            company_name=company_name,
+            company_name=company_name or job.source_company_name or "Unknown company",
+            ats_provider=job.ats_provider,
             title=job.title,
             location=job.location,
             work_mode=job.work_mode,
@@ -120,6 +139,9 @@ def summary(
             user_state=states.get(job.id),
             freshness_at=job_freshness_evidence(job).at,
             freshness_source=job_freshness_evidence(job).source,
+            source_kind=job.source_kind,
+            source_provider=job.source_provider or (job.ats_provider.value if job.ats_provider else None),
+            source_verified=job.source_kind == "DIRECT_ATS",
         )
         for job, company_name in rows
     ]
@@ -128,6 +150,8 @@ def summary(
         monitored_companies=int(monitored_companies),
         watched_companies=int(watched_companies),
         jobs_discovered_today=int(jobs_discovered_today),
+        wide_jobs_today=int(wide_jobs_today),
+        direct_jobs_today=int(direct_jobs_today),
         matches_today=int(matches_today),
         alerts_sent_today=int(alerts_sent_today),
         last_successful_crawler_run=last_successful_crawler_run,

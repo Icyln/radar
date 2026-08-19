@@ -47,6 +47,7 @@ class CompanyRead(BaseModel):
     ats_identifier: str
     monitoring_priority: MonitoringPriority
     active: bool
+    discovery_boost_until: datetime | None
     last_checked_at: datetime | None
     last_successful_check_at: datetime | None
     last_error_at: datetime | None

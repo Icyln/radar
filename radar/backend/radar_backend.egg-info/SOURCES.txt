@@ -6,6 +6,7 @@ app/api/auth.py
 app/api/companies.py
 app/api/dashboard.py
 app/api/deps.py
+app/api/discovery.py
 app/api/health.py
 app/api/job_profiles.py
 app/api/jobs.py
@@ -24,12 +25,22 @@ app/core/security.py
 app/db/__init__.py
 app/db/base.py
 app/db/session.py
+app/discovery/__init__.py
+app/discovery/crawler.py
+app/discovery/detector.py
+app/discovery/feeds.py
+app/discovery/hiring.py
+app/discovery/security.py
+app/discovery/catalogs/starter.csv
 app/matching/__init__.py
 app/matching/engine.py
+app/matching/freshness.py
 app/matching/service.py
 app/models/__init__.py
 app/models/company.py
 app/models/crawler_log.py
+app/models/discovery_target.py
+app/models/discovery_target_candidate.py
 app/models/enums.py
 app/models/job.py
 app/models/job_match.py
@@ -37,6 +48,7 @@ app/models/job_profile.py
 app/models/mixins.py
 app/models/monitor_run.py
 app/models/notification.py
+app/models/source_candidate.py
 app/models/telegram_connection.py
 app/models/telegram_link_token.py
 app/models/user.py
@@ -48,6 +60,7 @@ app/schemas/__init__.py
 app/schemas/auth.py
 app/schemas/company.py
 app/schemas/dashboard.py
+app/schemas/discovery.py
 app/schemas/job.py
 app/schemas/job_profile.py
 app/schemas/jobs_api.py
@@ -55,6 +68,7 @@ app/schemas/telegram.py
 app/schemas/watchlist.py
 app/scripts/__init__.py
 app/scripts/check_worker_config.py
+app/scripts/import_discovery_targets.py
 app/scripts/seed_company.py
 app/scripts/set_admin.py
 app/scripts/set_telegram_webhook.py
@@ -62,6 +76,8 @@ app/scripts/telegram_chat_id.py
 app/scripts/test_telegram.py
 app/services/__init__.py
 app/services/auth.py
+app/services/discovery.py
+app/services/discovery_signals.py
 app/services/fingerprint.py
 app/services/job_processor.py
 app/services/locking.py
@@ -71,6 +87,7 @@ app/services/telegram_linking.py
 app/services/text.py
 app/services/user_job_states.py
 app/workers/__init__.py
+app/workers/discovery.py
 app/workers/monitor.py
 radar_backend.egg-info/PKG-INFO
 radar_backend.egg-info/SOURCES.txt
@@ -91,4 +108,7 @@ tests/test_notifications.py
 tests/test_phase2_notifications.py
 tests/test_phase43_coverage.py
 tests/test_phase5_monitoring.py
+tests/test_phase6_discovery.py
+tests/test_phase6c_freshness.py
+tests/test_phase7_active_hiring.py
 tests/test_telegram_scripts.py

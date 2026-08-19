@@ -1,4 +1,4 @@
-# Architecture — Phase 0 through Phase 5
+# Architecture — Phase 0 through Phase 6C
 
 ## Decision
 
@@ -107,4 +107,81 @@ Each scheduled invocation is persisted independently of the GitHub runner. Per-c
 11. Scheduled workers use database state as their durable clock; GitHub Actions is only the trigger.
 12. A monitor invocation is observable through `monitor_runs`, with company outcomes linked through `crawler_logs`.
 13. Batching/sharding change execution distribution, not job identity or notification semantics.
-14. Phase 5 does not discover unknown companies; registry expansion remains Phase 6.
+14. Discovery is upstream of monitoring: validation never writes jobs directly into the main job lifecycle pipeline.
+15. Untrusted discovery URLs are bounded and public-network validated before fetching.
+16. Only collector-validated Greenhouse/Lever/Ashby candidates may be promoted automatically.
+17. Catalog/feed-discovered sources enter the registry as LOW priority; fresh Phase-7 hiring-signal sources keep that base priority but receive a temporary effective-NORMAL discovery boost, without overwriting an admin-set priority.
+18. Public hiring indexes are discovery seeds only; persisted job lifecycle state still comes from validated direct ATS collectors.
+19. First-sync alert suppression may be relaxed only for one role unambiguously identified by fresh external evidence.
+
+
+## Phase 6 discovery flow
+
+```text
+User / admin / curated CSV
+          |
+          v
+   discovery_targets
+          | bounded public-page scan
+          v
+    source_candidates
+          | production collector validation
+          v
+        VALID
+          | promote
+          v
+   Company Registry (LOW)
+          | next Phase 5 monitor
+          v
+ Normalized Jobs -> matching -> notification
+```
+
+Discovery does not create a parallel job ingestion path. The monitor remains the only owner of persisted job lifecycle processing.
+
+
+## Phase 6C freshness model
+
+Freshness is a profile rule, not a destructive retention rule. Radar keeps all jobs and historical JobMatch rows, while current Matched/dashboard views re-evaluate whether at least one enabled profile still considers a job fresh.
+
+```text
+provider posted_at available
+        -> use posted_at
+
+provider posted_at unavailable
+        + job discovered after company baseline
+        -> use first_seen_at
+
+provider posted_at unavailable
+        + job imported during initial baseline
+        -> freshness UNKNOWN
+```
+
+This distinction prevents the first synchronization of a newly discovered company from making old undated inventory look freshly posted. A strict 30-day profile excludes UNKNOWN baseline jobs by default; users may opt into them explicitly or choose Any age.
+
+Notification eligibility is stricter than dashboard matching: initial baseline matches are never pushed, and updates to an already-known job may create/update dashboard match state but do not enqueue a fresh-job Telegram alert. Only match records created from genuinely new post-baseline job identities are considered for user notification.
+
+Registry growth remains system-managed. Ordinary users do not upload bulk company CSVs; system/admin catalogs and configured feeds grow the shared source registry, while a user company request is only an optional fallback for a missing source.
+
+
+## Phase 7 active-hiring discovery
+
+```text
+Active enabled WIDE profiles
+          | unique target titles
+          v
+Public hiring-signal adapters (bounded)
+          | local title + freshness filter
+          v
+   discovery_targets [SYSTEM_FEED]
+          | bounded scan
+          v
+    source_candidates
+          | collector validation
+          v
+Company Registry (LOW + temporary NORMAL boost when signal-fresh)
+          |
+          v
+Phase 5 direct ATS monitor
+```
+
+A signal may also carry publication evidence for the specific role that caused discovery. Radar attaches that timestamp only when the first ATS snapshot contains one unambiguous matching job. Provider `posted_at` has precedence; unrelated baseline inventory remains UNKNOWN.

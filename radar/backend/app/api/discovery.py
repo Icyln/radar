@@ -13,14 +13,17 @@ from app.models.enums import (
     DiscoveryTargetStatus,
 )
 from app.models.source_candidate import SourceCandidate
+from app.models.telegram_connection import TelegramConnection
 from app.models.user import User
 from app.schemas.discovery import (
     DiscoverySummaryRead,
     DiscoveryTargetCreate,
     DiscoveryTargetRead,
     SourceCandidateRead,
+    WideSearchRefreshRead,
 )
 from app.services.discovery import DiscoveryService, discovery_summary
+from app.services.notifications import deliver_pending_notifications
 from app.core.config import Settings, get_settings
 
 router = APIRouter(prefix="/api/v1/discovery", tags=["discovery"])
@@ -155,6 +158,55 @@ def promote_candidate(
     refreshed = session.get(SourceCandidate, candidate_id)
     assert refreshed is not None
     return refreshed
+
+
+@router.post("/wide-search/refresh", response_model=WideSearchRefreshRead)
+async def refresh_wide_search(
+    user: User = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+    session: Session = Depends(get_db),
+) -> WideSearchRefreshRead:
+    """Run the fast user-facing Phase 7C job-discovery path.
+
+    This intentionally does not validate hundreds of ATS candidates inline. Jobs are
+    stored/matched immediately; ATS resolution remains a background quality upgrade.
+    """
+    engine = session.get_bind()
+    service = DiscoveryService(engine=engine, settings=settings)
+    result = await service.ingest_hiring_signals(user_id=user.id)
+    notification_ids = list(result.get("_notification_ids", []))
+    connection = session.scalar(
+        select(TelegramConnection).where(
+            TelegramConnection.user_id == user.id,
+            TelegramConnection.verified.is_(True),
+        )
+    )
+    telegram_ready = connection is not None and bool(settings.telegram_bot_token)
+    notifications_sent = 0
+    if telegram_ready and notification_ids:
+        notifications_sent = await deliver_pending_notifications(
+            engine=engine,
+            settings=settings,
+            notification_ids=notification_ids,
+            user_id=user.id,
+        )
+    return WideSearchRefreshRead(
+        profiles=int(result["profiles"]),
+        queries=int(result["queries"]),
+        signals_seen=int(result["signals_seen"]),
+        signals_relevant=int(result["signals_relevant"]),
+        jobs_new=int(result["jobs_new"]),
+        jobs_updated=int(result["jobs_updated"]),
+        jobs_existing=int(result["jobs_existing"]),
+        matches_created=int(result["matches_created"]),
+        notifications_queued=int(result["notifications_queued"]),
+        notifications_sent=notifications_sent,
+        telegram_ready=telegram_ready,
+        targets_resolved=int(result["targets_resolved"]),
+        probe_candidates_staged=int(result["probe_candidates_staged"]),
+        provider_failed=int(result["provider_failed"]),
+        provider_warnings=list(result.get("provider_warnings", [])),
+    )
 
 
 @router.get("/summary", response_model=DiscoverySummaryRead)

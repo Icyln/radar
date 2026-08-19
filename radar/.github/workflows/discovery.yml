@@ -1,0 +1,64 @@
+name: Source Discovery
+
+on:
+  schedule:
+    # Phase 7D: refresh active-hiring discovery every six hours and deliver new Wide matches.
+    # The midnight run also refreshes Himalayas; its public JSON data refreshes daily.
+    - cron: "23 0 * * *"
+    - cron: "23 6 * * *"
+    - cron: "23 12 * * *"
+    - cron: "23 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radar-source-discovery
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: worker
+      LOG_LEVEL: INFO
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      PHASE1_MAX_NOTIFICATIONS_PER_RUN: "50"
+      DISCOVERY_SYSTEM_FEED_URLS: ${{ vars.DISCOVERY_SYSTEM_FEED_URLS }}
+      # Himalayas documents a 24-hour data refresh; avoid redundant rate-limited queries.
+      DISCOVERY_HIRING_HIMALAYAS_ENABLED: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '23 0 * * *' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install Radar discovery worker
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Validate database configuration
+        run: python -m app.scripts.check_worker_config --require-remote-database
+
+      - name: Discover and validate ATS sources
+        run: >-
+          python -m app.workers.discovery
+          --target-batch-size 25
+          --candidate-batch-size 50
+          --max-concurrency 3
+          --revalidate-batch-size 50
+          --auto-promote
+          --ingest-system-feeds
+          --ingest-hiring-signals
+          --revalidate-promoted

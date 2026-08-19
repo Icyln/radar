@@ -1,6 +1,6 @@
 # Radar
 
-Radar is a small, dependable job-intelligence and early-warning system. This repository now contains **Phase 0 through Phase 5** of the master engineering specification.
+Radar is a small, dependable job-intelligence and early-warning system. This repository now contains **Phase 0 through Phase 7D** of the master engineering specification.
 
 ## No-Docker local development
 
@@ -13,6 +13,14 @@ Start here:
 - [`docs/phase4-setup-deployment.md`](docs/phase4-setup-deployment.md) — dashboard setup, local acceptance testing, and Vercel deployment
 - [`docs/phase4-3-two-mode-coverage.md`](docs/phase4-3-two-mode-coverage.md) — Watchlist/Wide Search upgrade, Detected jobs, migration, and acceptance test
 - [`docs/phase5-automated-monitoring.md`](docs/phase5-automated-monitoring.md) — GitHub Actions scheduling, repository secrets, batching, sharding, production smoke tests, and operational queries
+- [`docs/phase6-source-discovery.md`](docs/phase6-source-discovery.md) — targeted ATS discovery, validation/promotion, user requests, bulk import, and discovery workflow
+- [`docs/phase6b-system-discovery.md`](docs/phase6b-system-discovery.md) — zero-input system feeds, automatic registry growth, and promoted-source revalidation
+- [`docs/phase6c-freshness.md`](docs/phase6c-freshness.md) — freshness-aware matching, baseline evidence, Detected filters, and notification hardening
+- [`docs/phase7-active-hiring-discovery.md`](docs/phase7-active-hiring-discovery.md) — profile-driven fresh hiring discovery, ATS validation, and safe first-sync evidence
+- [`docs/phase7-setup.md`](docs/phase7-setup.md) — Phase 7 migration, settings, local/GitHub acceptance testing, and dashboard checks
+- [`docs/phase7-change-manifest.md`](docs/phase7-change-manifest.md) — exact Phase 7 behavior, changed areas, verification, and packaging notes
+- [`docs/phase7c-wide-job-ingestion.md`](docs/phase7c-wide-job-ingestion.md) — Phase 7C job-first Wide Search and user-side acceptance test
+- [`docs/phase7d-telegram-delivery.md`](docs/phase7d-telegram-delivery.md) — Phase 7D immediate Wide alerts, Telegram preview testing, and delivery status
 - [`docs/postgresql-manual-setup.sql.example`](docs/postgresql-manual-setup.sql.example) — local role/database creation example
 
 ## Implemented phases
@@ -111,7 +119,82 @@ Start here:
 - CI hardening with current Python/Node setup actions
 - partial-company-failure tolerance without hiding fatal worker failures
 
-Phase 6 source discovery remains separate: Phase 5 automates monitoring of sources already in the registry.
+### Phase 6A — Targeted discovery and validation
+
+- user-submitted company/careers discovery targets
+- bounded, SSRF-aware public-page scanning
+- Greenhouse / Lever / Ashby URL detection
+- persisted source candidate validation states
+- validation through the production collector contract
+- safe automatic promotion into the company registry as LOW priority
+- optional auto-watch for the requesting user
+- admin validation queue/retry/manual promotion API and UI
+- bulk CSV target import
+- daily + manually dispatchable GitHub Actions discovery workflow
+- no dependency on Render for discovery execution
+
+Phase 6A grows the registry from supplied company/career targets. Phase 6B adds system-managed bundled/remote discovery feeds so WIDE users no longer need to submit companies themselves. It still deliberately does not pretend the provider APIs offer a global list of all ATS tenants.
+
+### Phase 6B — Automatic registry growth
+
+- bundled starter source catalog ingested on every discovery cycle
+- optional public CSV/JSON system feed ingestion
+- source provenance (`USER` vs `SYSTEM_FEED`)
+- idempotent feed entry deduplication
+- stale system target refresh
+- automatic retry of old invalid system candidates
+- periodic revalidation of promoted ATS sources
+- conservative revalidation failures that do not disable a source after one transient error
+- admin dashboard metrics for system targets/promotions/revalidation warnings
+- GitHub Actions repository variable support for `DISCOVERY_SYSTEM_FEED_URLS`
+
+
+### Phase 6C — Freshness-aware matching
+
+- profile-level freshness windows (1/3/7/14/30/60/90 days or Any age)
+- 30-day strict freshness default for new and migrated profiles
+- provider `posted_at` used when available
+- post-baseline `first_seen_at` fallback when a provider omits posting time
+- initial baseline inventory with no posting date remains UNKNOWN instead of looking fresh
+- optional per-profile inclusion of unknown-date baseline jobs
+- Matched and dashboard recent jobs re-evaluate current freshness without deleting historical JobMatch records
+- Detected page freshness filters, including explicit unknown-date inspection
+- notification hardening so only genuinely new post-baseline jobs enqueue user alerts; updated existing jobs may match the dashboard but do not create a fresh-job alert
+- users never need to upload company CSVs for Wide Search; system/admin feeds remain an internal registry-growth mechanism
+
+### Phase 7 — Profile-driven active-hiring discovery
+
+- enabled Wide profiles automatically become bounded source-discovery demand
+- fresh public hiring signals are filtered by profile title and freshness before direct ATS resolution
+- built-in Arbeitnow Europe/UK and Himalayas remote-job signal adapters require no API key
+- signal targets remain system-owned; ordinary users never upload company lists or manage ATS identifiers
+- aggregator application pages are provenance only; Radar stages exact or bounded guessed Greenhouse/Lever/Ashby tenants and validates their APIs directly
+- guessed ATS tenants must contain the external signal title before promotion, preventing company-slug collisions
+- hiring signals are discovery seeds only; direct Greenhouse/Lever/Ashby validation remains mandatory before registry promotion
+- fresh signal-discovered sources retain LOW base priority but receive a temporary effective-NORMAL monitoring boost (7 days by default)
+- external role evidence can safely identify one otherwise-undated baseline job without marking unrelated baseline inventory fresh
+- provider `posted_at` remains authoritative over discovery-signal evidence
+- first-sync Telegram suppression has one narrow exception for the exact fresh role that caused source discovery
+- Source Discovery runs every six hours while Phase-5 ATS monitoring remains on its independent 30-minute cadence
+
+### Phase 7C — Wide job ingestion
+
+- Fresh jobs from configured hiring feeds are persisted and matched immediately for WIDE profiles, even before the employer has a verified registry entry.
+- Jobs carry explicit `Wide discovery` vs `Direct ATS` provenance.
+- The Jobs page has a signed-in **Refresh Wide Search** action for visible end-to-end testing.
+- ATS discovery remains parallel; successful resolution can upgrade an unambiguous WIDE job in place.
+- External provider failures are isolated so another provider can still complete the refresh.
+
+### Phase 7D — Wide Search Telegram delivery
+
+- New WIDE matches enqueue the same per-user Telegram outbox used by direct ATS monitoring.
+- **Refresh Wide Search** immediately attempts delivery of only the new alerts created by that refresh.
+- The refresh result shows Telegram readiness, alerts sent, and any remainder still queued.
+- Settings adds **Send test alert**, which sends a real Radar alert preview using the user's latest match when available.
+- Settings shows today's sent/pending/failed job-alert delivery counts.
+- Scheduled Source Discovery receives `TELEGRAM_BOT_TOKEN`, so background Wide discovery can deliver new matches in the same worker run.
+- Existing notification/job identity rules keep repeated Wide refreshes idempotent; a WIDE row upgraded in place to Direct ATS does not create a second match notification.
+
 
 ## Runtime architecture
 
@@ -169,7 +252,7 @@ pytest
 Expected migration head:
 
 ```text
-0004_phase5
+0009_phase7c
 ```
 
 Then follow [`docs/phase2-phase3-setup.md`](docs/phase2-phase3-setup.md).
@@ -259,6 +342,16 @@ python -m app.scripts.check_worker_config --require-remote-database --require-te
 ```
 
 See [`docs/phase5-automated-monitoring.md`](docs/phase5-automated-monitoring.md) for the full setup, workflow-dispatch smoke test, monitoring SQL, cost notes, and scaling guidance.
+
+## Phase 6 source discovery
+
+Queue company/career URLs from the dashboard at `/discovery`, or bulk import curated targets, then process them manually with:
+
+```powershell
+python -m app.workers.discovery --auto-promote
+```
+
+Production discovery is scheduled by `.github/workflows/discovery.yml`. Phase 7 also uses enabled Wide-profile titles to seed fresh active-hiring discovery automatically. See [`docs/phase7-active-hiring-discovery.md`](docs/phase7-active-hiring-discovery.md).
 
 ## Seed companies
 

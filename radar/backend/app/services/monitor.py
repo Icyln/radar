@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Literal
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -16,9 +16,11 @@ from app.matching.service import create_matches_for_jobs
 from app.models.company import Company
 from app.models.crawler_log import CrawlerLog
 from app.models.enums import ATSProvider, CrawlerStatus, MonitoringPriority
+from app.models.job_match import JobMatch
 from app.models.monitor_run import MonitorRun
 from app.models.user_company_watchlist import UserCompanyWatchlist
 from app.schemas.company import CompanyTarget
+from app.services.discovery_signals import apply_discovery_signals_to_jobs
 from app.services.job_processor import process_successful_snapshot
 from app.services.locking import release_company_lock, try_company_lock
 from app.services.notifications import (
@@ -79,7 +81,30 @@ class MonitorService:
             if ats_identifier:
                 statement = statement.where(Company.ats_identifier == ats_identifier)
             if priority:
-                statement = statement.where(Company.monitoring_priority == priority)
+                now = datetime.now(timezone.utc)
+                if priority is MonitoringPriority.NORMAL:
+                    statement = statement.where(
+                        or_(
+                            Company.monitoring_priority == MonitoringPriority.NORMAL,
+                            and_(
+                                Company.monitoring_priority == MonitoringPriority.LOW,
+                                Company.discovery_boost_until.is_not(None),
+                                Company.discovery_boost_until > now,
+                            ),
+                        )
+                    )
+                elif priority is MonitoringPriority.LOW:
+                    statement = statement.where(
+                        and_(
+                            Company.monitoring_priority == MonitoringPriority.LOW,
+                            or_(
+                                Company.discovery_boost_until.is_(None),
+                                Company.discovery_boost_until <= now,
+                            ),
+                        )
+                    )
+                else:
+                    statement = statement.where(Company.monitoring_priority == priority)
             if min_age_minutes is not None:
                 due_before = datetime.now(timezone.utc) - timedelta(minutes=min_age_minutes)
                 statement = statement.where(
@@ -343,6 +368,13 @@ class MonitorService:
                         now=completed,
                         initial_sync=initial_sync,
                     )
+                    signal_alertable_job_ids = apply_discovery_signals_to_jobs(
+                        session,
+                        company_id=company.id,
+                        job_ids=result.new_job_ids,
+                        max_signal_age_days=self.settings.discovery_hiring_max_age_days,
+                        now=completed,
+                    )
                     new_match_result = create_matches_for_jobs(
                         session, job_ids=result.new_job_ids
                     )
@@ -350,14 +382,27 @@ class MonitorService:
                         session, job_ids=result.updated_job_ids
                     )
                     matches_created = new_match_result.created + updated_match_result.created
-                    # Initial source sync establishes a baseline. Dashboard matches may be
-                    # persisted, but only genuinely new post-baseline jobs can enqueue alerts.
-                    if not initial_sync:
-                        enqueue_match_notifications(
-                            session,
-                            match_ids=new_match_result.match_ids,
-                            crawler_log_id=crawler_log.id,
-                        )
+                    # Initial source sync normally establishes a silent baseline. Phase 7 has
+                    # one narrow exception: a fresh external hiring signal may identify one
+                    # specific baseline role that caused the source to be discovered.
+                    alert_match_ids = new_match_result.match_ids
+                    if initial_sync:
+                        if signal_alertable_job_ids and alert_match_ids:
+                            alert_match_ids = list(
+                                session.scalars(
+                                    select(JobMatch.id).where(
+                                        JobMatch.id.in_(alert_match_ids),
+                                        JobMatch.job_id.in_(signal_alertable_job_ids),
+                                    )
+                                )
+                            )
+                        else:
+                            alert_match_ids = []
+                    enqueue_match_notifications(
+                        session,
+                        match_ids=alert_match_ids,
+                        crawler_log_id=crawler_log.id,
+                    )
                     # Retain the Phase-1 single-recipient path for local smoke testing.
                     enqueue_phase1_notifications(
                         session,

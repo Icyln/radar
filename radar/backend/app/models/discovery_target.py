@@ -15,6 +15,7 @@ class DiscoveryTarget(TimestampMixin, Base):
         Index("ix_discovery_targets_status_created", "status", "created_at"),
         Index("ix_discovery_targets_user_created", "submitted_by_user_id", "created_at"),
         Index("ix_discovery_targets_origin_status", "origin", "status"),
+        Index("ix_discovery_targets_signal_posted", "job_posted_at_hint", "status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -29,6 +30,10 @@ class DiscoveryTarget(TimestampMixin, Base):
     )
     source_label: Mapped[str | None] = mapped_column(String(255))
     company_name_hint: Mapped[str | None] = mapped_column(String(255))
+    signal_external_id: Mapped[str | None] = mapped_column(String(500))
+    job_title_hint: Mapped[str | None] = mapped_column(String(500))
+    job_location_hint: Mapped[str | None] = mapped_column(String(500))
+    job_posted_at_hint: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     auto_watch: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     status: Mapped[DiscoveryTargetStatus] = mapped_column(
         Enum(DiscoveryTargetStatus, name="discovery_target_status"),

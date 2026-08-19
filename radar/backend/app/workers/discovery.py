@@ -20,6 +20,12 @@ def parser() -> argparse.ArgumentParser:
         help="Ingest bundled and configured system discovery feeds before scanning targets",
     )
     item.add_argument(
+        "--ingest-hiring-signals",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use enabled Wide profiles to seed discovery from fresh public hiring signals",
+    )
+    item.add_argument(
         "--revalidate-promoted",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -41,6 +47,7 @@ async def async_main() -> None:
             max_concurrency=args.max_concurrency or settings.discovery_max_concurrency,
             auto_promote=args.auto_promote,
             ingest_system_feeds=args.ingest_system_feeds,
+            ingest_hiring_signals=args.ingest_hiring_signals,
             revalidate_promoted=args.revalidate_promoted,
             revalidate_batch_size=(
                 args.revalidate_batch_size or settings.discovery_revalidate_batch_size

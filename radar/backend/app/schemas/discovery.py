@@ -26,6 +26,10 @@ class DiscoveryTargetRead(BaseModel):
     origin: DiscoveryTargetOrigin
     source_label: str | None
     company_name_hint: str | None
+    signal_external_id: str | None
+    job_title_hint: str | None
+    job_location_hint: str | None
+    job_posted_at_hint: datetime | None
     auto_watch: bool
     status: DiscoveryTargetStatus
     scan_attempt_count: int
@@ -72,3 +76,24 @@ class DiscoverySummaryRead(BaseModel):
     system_targets: int
     system_promoted_candidates: int
     revalidation_failures: int
+    hiring_signal_targets: int
+    hiring_signal_promoted_sources: int
+    fresh_signal_jobs: int
+
+
+class WideSearchRefreshRead(BaseModel):
+    profiles: int
+    queries: int
+    signals_seen: int
+    signals_relevant: int
+    jobs_new: int
+    jobs_updated: int
+    jobs_existing: int
+    matches_created: int
+    notifications_queued: int
+    notifications_sent: int
+    telegram_ready: bool
+    targets_resolved: int
+    probe_candidates_staged: int
+    provider_failed: int
+    provider_warnings: list[str] = []

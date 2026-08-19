@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { Badge } from "@/components/badge";
 import { clientRequest } from "@/lib/client-api";
@@ -95,7 +96,10 @@ export function CompanyManager({
   return <div className="space-y-5">
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-xs text-zinc-500">Watching {watchlistIds.length} {watchlistIds.length === 1 ? "company" : "companies"}. Watchlist-only profiles match only these sources.</p>
-      {isAdmin ? <button className="button-primary" onClick={() => setShowForm((value) => !value)}>{showForm ? "Close form" : "Add company"}</button> : null}
+      <div className="flex gap-2">
+        <Link className="button-secondary" href="/discovery">Request company</Link>
+        {isAdmin ? <button className="button-primary" onClick={() => setShowForm((value) => !value)}>{showForm ? "Close form" : "Add company"}</button> : null}
+      </div>
     </div>
 
     {showForm ? <form onSubmit={submit} className="panel p-5 sm:p-6">
@@ -127,7 +131,7 @@ export function CompanyManager({
                 <td className="px-4 py-4"><a href={company.career_url} target="_blank" rel="noreferrer" className="font-medium text-zinc-100 hover:text-emerald-300">{company.name}</a><p className="mt-1 text-xs text-zinc-600">{company.ats_identifier}</p></td>
                 <td className="px-4 py-4">{humanize(company.ats_provider)}</td>
                 <td className="px-4 py-4"><button className={watched ? "button-secondary border-emerald-800 text-emerald-300" : "button-ghost"} disabled={watchBusy === company.id} onClick={() => toggleWatch(company)}>{watchBusy === company.id ? "Updating…" : watched ? "Watching" : "Watch"}</button></td>
-                <td className="px-4 py-4"><Badge>{humanize(company.monitoring_priority)}</Badge></td>
+                <td className="px-4 py-4"><Badge>{humanize(company.monitoring_priority)}</Badge>{company.discovery_boost_until ? <p className="mt-1 max-w-40 text-xs text-amber-300">Signal boost until {formatDateTime(company.discovery_boost_until)}</p> : null}</td>
                 <td className="px-4 py-4 whitespace-nowrap text-xs text-zinc-500">{formatDateTime(company.last_successful_check_at)}</td>
                 <td className="px-4 py-4"><Badge tone={!company.active ? "neutral" : company.consecutive_failures > 0 ? "warning" : "success"}>{!company.active ? "Paused" : company.consecutive_failures > 0 ? `${company.consecutive_failures} failures` : "Healthy"}</Badge></td>
                 {isAdmin ? <td className="px-4 py-4 text-right"><button className="button-ghost" onClick={() => toggleActive(company)}>{company.active ? "Pause" : "Enable"}</button></td> : null}

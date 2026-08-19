@@ -18,3 +18,15 @@ class TelegramConnectionRead(BaseModel):
     username: str | None
     verified: bool
     connected_at: datetime
+
+
+class TelegramTestResponse(BaseModel):
+    ok: bool
+    message: str
+    telegram_message_id: str
+
+
+class TelegramDeliveryStatus(BaseModel):
+    sent_today: int
+    pending: int
+    failed: int

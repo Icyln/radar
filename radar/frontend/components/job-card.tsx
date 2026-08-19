@@ -43,6 +43,9 @@ export function JobCard({ job, compact = false }: { job: JobListItem; compact?: 
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={statusTone(job.status)}>{humanize(job.status)}</Badge>
             <Badge>{humanize(job.work_mode)}</Badge>
+            <Badge tone={job.source_kind === "WIDE_DISCOVERY" ? "info" : "neutral"}>
+              {job.source_kind === "WIDE_DISCOVERY" ? `Wide discovery${job.source_provider ? ` · ${humanize(job.source_provider)}` : ""}` : "Direct ATS"}
+            </Badge>
             {state ? <Badge tone={state === "SAVED" ? "info" : "neutral"}>{humanize(state)}</Badge> : null}
           </div>
           <h2 className="mt-3 text-base font-semibold leading-6 text-zinc-50 sm:text-lg">{job.title}</h2>
@@ -51,7 +54,10 @@ export function JobCard({ job, compact = false }: { job: JobListItem; compact?: 
             <span>{job.location || "Location not specified"}</span>
             {job.employment_type ? <span>{humanize(job.employment_type)}</span> : null}
             <span>Detected {relativeTime(job.first_seen_at)}</span>
-            {job.posted_at ? <span>Posted {relativeTime(job.posted_at)}</span> : null}
+            {job.freshness_source === "POSTED_AT" && job.freshness_at ? <span>Posted {relativeTime(job.freshness_at)}</span> : null}
+            {job.freshness_source === "DISCOVERY_SIGNAL" && job.freshness_at ? <span>Fresh hiring signal {relativeTime(job.freshness_at)}</span> : null}
+            {job.freshness_source === "FIRST_SEEN" && job.freshness_at ? <span>Freshness from detection {relativeTime(job.freshness_at)}</span> : null}
+            {job.freshness_source === "UNKNOWN" ? <span>Posting date unavailable</span> : null}
           </div>
         </div>
         <a href={job.apply_url} target="_blank" rel="noreferrer" className="button-primary shrink-0">Open job ↗</a>

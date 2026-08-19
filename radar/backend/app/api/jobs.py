@@ -37,12 +37,13 @@ def _state_map(
     return {job_id: state for job_id, state in states}
 
 
-def _serialize(job: Job, company_name: str, state: UserJobStateType | None) -> JobListItem:
+def _serialize(job: Job, company_name: str | None, state: UserJobStateType | None) -> JobListItem:
     freshness = job_freshness_evidence(job)
     return JobListItem(
         id=job.id,
         company_id=job.company_id,
-        company_name=company_name,
+        company_name=company_name or job.source_company_name or "Unknown company",
+        ats_provider=job.ats_provider,
         title=job.title,
         location=job.location,
         work_mode=job.work_mode,
@@ -57,6 +58,9 @@ def _serialize(job: Job, company_name: str, state: UserJobStateType | None) -> J
         user_state=state,
         freshness_at=freshness.at,
         freshness_source=freshness.source,
+        source_kind=job.source_kind,
+        source_provider=job.source_provider or (job.ats_provider.value if job.ats_provider else None),
+        source_verified=job.source_kind == "DIRECT_ATS",
     )
 
 
@@ -72,7 +76,7 @@ def list_jobs(
     if view == "matched":
         statement = (
             select(Job, Company.name, JobProfile)
-            .join(Company, Company.id == Job.company_id)
+            .outerjoin(Company, Company.id == Job.company_id)
             .join(JobMatch, JobMatch.job_id == Job.id)
             .join(JobProfile, JobProfile.id == JobMatch.job_profile_id)
             .where(JobMatch.user_id == user.id, JobProfile.enabled.is_(True))
@@ -100,7 +104,7 @@ def list_jobs(
         desired = UserJobStateType.SAVED if view == "saved" else UserJobStateType.IGNORED
         statement = (
             select(Job, Company.name)
-            .join(Company, Company.id == Job.company_id)
+            .outerjoin(Company, Company.id == Job.company_id)
             .join(UserJobState, UserJobState.job_id == Job.id)
             .where(UserJobState.user_id == user.id, UserJobState.state == desired)
         )
@@ -120,7 +124,7 @@ def list_detected_jobs(
     company: str | None = Query(default=None, min_length=1, max_length=100),
     provider: ATSProvider | None = None,
     work_mode: WorkMode | None = None,
-    source: Literal["all", "watchlist", "other"] = "all",
+    source: Literal["all", "watchlist", "wide", "direct", "other"] = "all",
     q: str | None = Query(default=None, min_length=1, max_length=100),
     freshness: Literal["any", "1", "3", "7", "14", "30", "60", "90", "unknown"] = "any",
     limit: int = Query(default=24, ge=1, le=50),
@@ -136,7 +140,12 @@ def list_detected_jobs(
         filters.append(Job.company_id == company_id)
     company_text = company.strip() if company else ""
     if company_text:
-        filters.append(Company.name.ilike(f"%{company_text}%"))
+        filters.append(
+            or_(
+                Company.name.ilike(f"%{company_text}%"),
+                Job.source_company_name.ilike(f"%{company_text}%"),
+            )
+        )
     if provider is not None:
         filters.append(Job.ats_provider == provider)
     if work_mode is not None:
@@ -162,18 +171,26 @@ def list_detected_jobs(
         UserCompanyWatchlist.company_id == Job.company_id,
     ).exists()
     if source == "watchlist":
-        filters.append(watched)
-    elif source == "other":
-        filters.append(~watched)
+        filters.extend([Job.company_id.is_not(None), watched])
+    elif source == "wide":
+        filters.append(Job.source_kind == "WIDE_DISCOVERY")
+    elif source in {"direct", "other"}:
+        filters.extend([Job.source_kind == "DIRECT_ATS", ~watched])
 
     query_text = q.strip() if q else ""
     if query_text:
         pattern = f"%{query_text}%"
-        filters.append(or_(Job.title.ilike(pattern), Company.name.ilike(pattern)))
+        filters.append(
+            or_(
+                Job.title.ilike(pattern),
+                Company.name.ilike(pattern),
+                Job.source_company_name.ilike(pattern),
+            )
+        )
 
-    base = select(Job, Company.name).join(Company, Company.id == Job.company_id).where(*filters)
+    base = select(Job, Company.name).outerjoin(Company, Company.id == Job.company_id).where(*filters)
     total = session.scalar(
-        select(func.count(Job.id)).select_from(Job).join(Company, Company.id == Job.company_id).where(*filters)
+        select(func.count(Job.id)).select_from(Job).outerjoin(Company, Company.id == Job.company_id).where(*filters)
     ) or 0
     rows = session.execute(
         base.order_by(Job.first_seen_at.desc(), Job.id.desc()).limit(limit).offset(offset)
@@ -198,7 +215,7 @@ def get_job(
     if not user_can_manage_job(session, user_id=user.id, job_id=job_id):
         raise HTTPException(status_code=404, detail="job not found")
     row = session.execute(
-        select(Job, Company.name).join(Company, Company.id == Job.company_id).where(Job.id == job_id)
+        select(Job, Company.name).outerjoin(Company, Company.id == Job.company_id).where(Job.id == job_id)
     ).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="job not found")
@@ -229,7 +246,7 @@ def update_job_state(
         )
         row = session.execute(
             select(Job, Company.name)
-            .join(Company, Company.id == Job.company_id)
+            .outerjoin(Company, Company.id == Job.company_id)
             .where(Job.id == job_id)
         ).one()
         session.commit()

@@ -61,18 +61,26 @@ def _create_profile_job_matches(
     return MatchCreationResult(created=len(created_ids), match_ids=created_ids)
 
 
-def create_matches_for_jobs(session: Session, *, job_ids: list[uuid.UUID]) -> MatchCreationResult:
+def create_matches_for_jobs(
+    session: Session,
+    *,
+    job_ids: list[uuid.UUID],
+    profile_ids: list[uuid.UUID] | None = None,
+) -> MatchCreationResult:
     if not job_ids:
         return MatchCreationResult(created=0, match_ids=[])
 
     jobs = list(session.scalars(select(Job).where(Job.id.in_(job_ids))))
-    profiles = list(
-        session.scalars(
-            select(JobProfile)
-            .join(User, User.id == JobProfile.user_id)
-            .where(JobProfile.enabled.is_(True), User.is_active.is_(True))
-        )
+    profile_statement = (
+        select(JobProfile)
+        .join(User, User.id == JobProfile.user_id)
+        .where(JobProfile.enabled.is_(True), User.is_active.is_(True))
     )
+    if profile_ids is not None:
+        if not profile_ids:
+            return MatchCreationResult(created=0, match_ids=[])
+        profile_statement = profile_statement.where(JobProfile.id.in_(profile_ids))
+    profiles = list(session.scalars(profile_statement))
     watch_pairs = set(
         session.execute(
             select(UserCompanyWatchlist.user_id, UserCompanyWatchlist.company_id)
