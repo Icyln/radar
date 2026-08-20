@@ -28,7 +28,7 @@ class Job(TimestampMixin, Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    # Phase 7C WIDE discovery jobs can exist before Radar resolves the employer to a
+    # Broad-search jobs can exist before Radar resolves the employer to a
     # supported direct ATS source. Direct ATS jobs keep a normal company FK.
     company_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("companies.id", ondelete="CASCADE"), nullable=True, index=True
@@ -71,3 +71,6 @@ class Job(TimestampMixin, Base):
     notifications = relationship("Notification", back_populates="job", cascade="all, delete-orphan")
     matches = relationship("JobMatch", back_populates="job", cascade="all, delete-orphan")
     user_states = relationship("UserJobState", back_populates="job", cascade="all, delete-orphan")
+    source_observations = relationship(
+        "JobSourceObservation", back_populates="job", cascade="all, delete-orphan"
+    )

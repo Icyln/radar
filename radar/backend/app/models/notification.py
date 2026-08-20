@@ -12,8 +12,8 @@ from app.models.mixins import TimestampMixin
 class Notification(TimestampMixin, Base):
     __tablename__ = "notifications"
     __table_args__ = (
-        # Retained for Phase-1 compatibility and also protects the same Telegram chat
-        # from duplicate alerts if two workers race.
+        # Keep recipient-level uniqueness for historical rows and to protect the
+        # same Telegram chat from duplicate alerts if two workers race.
         UniqueConstraint("job_id", "channel", "recipient", name="uq_notification_job_channel_recipient"),
         UniqueConstraint("user_id", "job_id", "channel", name="uq_notification_user_job_channel"),
         Index("ix_notifications_delivery", "status", "created_at"),

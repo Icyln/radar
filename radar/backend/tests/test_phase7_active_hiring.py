@@ -666,3 +666,40 @@ def test_phase7_summary_and_workflow_surface_active_hiring(engine) -> None:
     assert 'cron: "23 6 * * *"' in text
     assert "DISCOVERY_HIRING_HIMALAYAS_ENABLED" in text
     assert "--ingest-hiring-signals" in text
+
+
+def test_hiring_search_terms_interleave_users_and_deduplicate(engine, settings) -> None:
+    custom = settings.model_copy(update={"discovery_hiring_max_queries": 10})
+    first_user = uuid.uuid4()
+    second_user = uuid.uuid4()
+    profiles = [
+        JobProfile(
+            user_id=first_user,
+            name="First",
+            enabled=True,
+            coverage_mode=ProfileCoverageMode.WIDE,
+            job_titles=["Frontend Engineer", "Backend Engineer", "Platform Engineer"],
+            locations=[],
+            work_modes=[],
+            excluded_keywords=[],
+        ),
+        JobProfile(
+            user_id=second_user,
+            name="Second",
+            enabled=True,
+            coverage_mode=ProfileCoverageMode.WIDE,
+            job_titles=["Data Engineer", "Frontend Engineer", "QA Engineer"],
+            locations=[],
+            work_modes=[],
+            excluded_keywords=[],
+        ),
+    ]
+    service = DiscoveryService(engine=engine, settings=custom)
+
+    assert service.hiring_search_terms(profiles) == [
+        "Frontend Engineer",
+        "Data Engineer",
+        "Backend Engineer",
+        "QA Engineer",
+        "Platform Engineer",
+    ]

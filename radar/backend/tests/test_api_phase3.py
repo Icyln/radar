@@ -146,3 +146,54 @@ def test_telegram_link_token_is_single_use(client, engine, settings) -> None:
         connections = list(session.scalars(select(TelegramConnection)))
         assert len(connections) == 1
         assert connections[0].telegram_user_id == 123456
+
+
+def test_job_alert_limits_keep_accounts_bounded(client) -> None:
+    user = register(client, "limits@example.com")
+    headers = auth(user["access_token"])
+    base = {
+        "job_titles": ["software engineer"],
+        "locations": [],
+        "work_modes": [],
+        "excluded_keywords": [],
+    }
+
+    for index in range(5):
+        response = client.post(
+            "/api/v1/job-profiles",
+            headers=headers,
+            json={**base, "name": f"Alert {index + 1}"},
+        )
+        assert response.status_code == 201, response.text
+
+    too_many_active = client.post(
+        "/api/v1/job-profiles",
+        headers=headers,
+        json={**base, "name": "Alert 6"},
+    )
+    assert too_many_active.status_code == 409
+    assert "5 active job alerts" in too_many_active.json()["detail"]
+
+    paused = client.post(
+        "/api/v1/job-profiles",
+        headers=headers,
+        json={**base, "name": "Paused alert", "enabled": False},
+    )
+    assert paused.status_code == 201, paused.text
+
+
+def test_job_alert_rejects_more_than_five_titles(client) -> None:
+    user = register(client, "title-limits@example.com")
+    response = client.post(
+        "/api/v1/job-profiles",
+        headers=auth(user["access_token"]),
+        json={
+            "name": "Too broad",
+            "job_titles": [f"role {index}" for index in range(6)],
+            "locations": [],
+            "work_modes": [],
+            "excluded_keywords": [],
+        },
+    )
+    assert response.status_code == 422
+    assert "up to 5 job titles" in response.json()["detail"]

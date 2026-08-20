@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "radar-backend"
-version = "0.7.3"
+version = "0.8.4"
 description = "Radar job monitoring backend and worker"
 requires-python = ">=3.10"
 dependencies = [
   "alembic>=1.18,<2",
   "argon2-cffi>=23.1,<26",
-  "fastapi>=0.128,<1",
+  "fastapi>=0.133,<0.141",
   "httpx>=0.28,<1",
   "PyJWT>=2.10,<3",
   "psycopg[binary]>=3.2,<4",

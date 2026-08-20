@@ -40,7 +40,7 @@ jobs:
         with:
           node-version: "24"
           package-manager-cache: false
-      - run: npm install
+      - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build

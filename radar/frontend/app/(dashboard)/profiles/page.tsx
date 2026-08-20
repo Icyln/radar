@@ -8,5 +8,5 @@ export default async function ProfilesPage() {
     serverRequest<JobProfile[]>("/api/v1/job-profiles"),
     serverRequest<CompanyWatchlistEntry[]>("/api/v1/companies/watchlist")
   ]);
-  return <><PageHeader eyebrow="Matching" title="Job profiles" description="Define deterministic role rules, then choose Wide Search across Radar's automatically expanding registry or Watchlist-only coverage." /><ProfileManager initialProfiles={profiles} watchlistCount={watchlist.length} /></>;
+  return <><PageHeader eyebrow="Job Alerts" title="Job Alerts" description="Tell Radar what you want to find. Keep each alert focused and let Radar do the repeated checking." /><ProfileManager initialProfiles={profiles} watchlistCount={watchlist.length} /></>;
 }

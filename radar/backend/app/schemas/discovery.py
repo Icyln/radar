@@ -89,6 +89,7 @@ class WideSearchRefreshRead(BaseModel):
     jobs_new: int
     jobs_updated: int
     jobs_existing: int
+    jobs_deduplicated: int
     matches_created: int
     notifications_queued: int
     notifications_sent: int
@@ -97,3 +98,5 @@ class WideSearchRefreshRead(BaseModel):
     probe_candidates_staged: int
     provider_failed: int
     provider_warnings: list[str] = []
+    provider_successes: list[str] = []
+    provider_pages: int = 0

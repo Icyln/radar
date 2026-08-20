@@ -17,3 +17,7 @@ frontend/out/
 .DS_Store
 .idea/
 .vscode/
+*.egg-info/
+*.tsbuildinfo
+*.log
+coverage/

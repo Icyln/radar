@@ -2,7 +2,9 @@ from app.models.company import Company
 from app.models.crawler_log import CrawlerLog
 from app.models.discovery_target import DiscoveryTarget
 from app.models.discovery_target_candidate import DiscoveryTargetCandidate
+from app.models.discovery_run import DiscoveryRun
 from app.models.job import Job
+from app.models.job_source_observation import JobSourceObservation
 from app.models.job_match import JobMatch
 from app.models.job_profile import JobProfile
 from app.models.monitor_run import MonitorRun
@@ -19,7 +21,9 @@ __all__ = [
     "CrawlerLog",
     "DiscoveryTarget",
     "DiscoveryTargetCandidate",
+    "DiscoveryRun",
     "Job",
+    "JobSourceObservation",
     "JobMatch",
     "JobProfile",
     "MonitorRun",

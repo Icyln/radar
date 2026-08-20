@@ -17,58 +17,8 @@ from app.models.notification import Notification
 from app.models.telegram_connection import TelegramConnection
 from app.models.user_job_state import UserJobState
 from app.notifications.telegram import TelegramClient, TelegramError
-from app.services.text import normalize_for_match
 
 logger = logging.getLogger(__name__)
-
-
-def _eligible_title(job: Job, settings: Settings) -> bool:
-    if settings.phase1_notify_all_new_jobs:
-        return True
-    keywords = settings.phase1_keywords
-    if not keywords:
-        return False
-    normalized_title = normalize_for_match(job.title)
-    return any(keyword in normalized_title for keyword in keywords)
-
-
-def enqueue_phase1_notifications(
-    session: Session,
-    *,
-    company: Company,
-    new_job_ids: list[uuid.UUID],
-    settings: Settings,
-    initial_sync: bool,
-    crawler_log_id: uuid.UUID | None = None,
-) -> list[uuid.UUID]:
-    del company  # retained in the signature for Phase-1 compatibility
-    recipient = settings.phase1_telegram_chat_id
-    if not recipient or not settings.telegram_bot_token:
-        return []
-    if initial_sync and not settings.phase1_notify_on_initial_sync:
-        return []
-
-    queued: list[uuid.UUID] = []
-    jobs = list(session.scalars(select(Job).where(Job.id.in_(new_job_ids)))) if new_job_ids else []
-    for job in jobs:
-        if not _eligible_title(job, settings):
-            continue
-        notification = Notification(
-            user_id=None,
-            job_id=job.id,
-            channel=NotificationChannel.TELEGRAM,
-            recipient=recipient,
-            crawler_log_id=crawler_log_id,
-            status=NotificationStatus.PENDING,
-        )
-        try:
-            with session.begin_nested():
-                session.add(notification)
-                session.flush()
-            queued.append(notification.id)
-        except IntegrityError:
-            continue
-    return queued
 
 
 def enqueue_match_notifications(
@@ -155,7 +105,7 @@ def _claimable_query(
     return (
         statement
         .order_by(Notification.created_at.asc())
-        .limit(settings.phase1_max_notifications_per_run)
+        .limit(settings.telegram_max_notifications_per_run)
     )
 
 

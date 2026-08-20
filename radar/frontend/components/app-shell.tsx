@@ -1,45 +1,31 @@
-import Link from "next/link";
 import { Brand } from "@/components/brand";
 import { LogoutButton } from "@/components/logout-button";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { WorkspaceNav } from "@/components/workspace-nav";
 import type { User } from "@/types/api";
-
-const navigation = [
-  ["/dashboard", "Overview"],
-  ["/profiles", "Job profiles"],
-  ["/jobs", "Jobs"],
-  ["/companies", "Companies"],
-  ["/discovery", "Discovery"],
-  ["/settings", "Settings"]
-] as const;
 
 export function AppShell({ user, children }: { user: User; children: React.ReactNode }) {
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[244px_minmax(0,1fr)]">
-      <aside className="hidden border-r border-zinc-800/80 bg-zinc-950/75 px-5 py-6 backdrop-blur lg:flex lg:min-h-screen lg:flex-col lg:sticky lg:top-0 lg:h-screen">
-        <Brand />
-        <nav className="mt-9 space-y-1">
-          {navigation.map(([href, label]) => (
-            <Link key={href} href={href} className="nav-link">
-              {label}
-            </Link>
-          ))}
-        </nav>
-        <div className="mt-auto border-t border-zinc-800 pt-5">
-          <p className="truncate text-xs font-medium text-zinc-300">{user.email}</p>
-          <p className="mt-1 text-[11px] text-zinc-600">{user.is_admin ? "Administrator" : "Radar user"}</p>
-          <div className="mt-3"><LogoutButton /></div>
+    <div className="workspace lg:grid lg:grid-cols-[236px_minmax(0,1fr)]">
+      <aside className="sticky top-0 hidden h-screen border-r border-ui bg-[var(--surface)] px-4 py-5 lg:flex lg:flex-col">
+        <div className="px-2"><Brand href="/dashboard" /></div>
+        <div className="mt-8"><WorkspaceNav isAdmin={user.is_admin} /></div>
+        <div className="mt-auto border-t border-ui px-2 pt-4">
+          <p className="truncate text-xs font-semibold text-main">{user.email}</p>
+          <p className="mt-1 text-[11px] text-faint">{user.is_admin ? "Administrator" : "Radar account"}</p>
+          <div className="mt-3 flex flex-wrap gap-2"><ThemeToggle compact /><LogoutButton /></div>
         </div>
       </aside>
 
       <div className="min-w-0">
-        <header className="sticky top-0 z-40 border-b border-zinc-800/80 bg-zinc-950/90 px-4 py-3 backdrop-blur lg:hidden">
+        <header className="sticky top-0 z-40 border-b border-ui bg-[color-mix(in_srgb,var(--surface)_94%,transparent)] px-4 py-3 backdrop-blur lg:hidden">
           <div className="flex items-center justify-between gap-3">
-            <Brand />
+            <Brand href="/dashboard" />
             <details className="relative">
-              <summary className="cursor-pointer list-none rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-300">Menu</summary>
-              <div className="absolute right-0 mt-2 w-52 rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-2xl">
-                {navigation.map(([href, label]) => <Link key={href} href={href} className="nav-link block">{label}</Link>)}
-                <div className="mt-1 border-t border-zinc-800 pt-1"><LogoutButton /></div>
+              <summary className="button-secondary cursor-pointer list-none">Menu</summary>
+              <div className="absolute right-0 mt-2 w-60 rounded-xl border border-ui bg-[var(--surface)] p-2 shadow-2xl">
+                <WorkspaceNav isAdmin={user.is_admin} mobile />
+                <div className="mt-2 flex gap-2 border-t border-ui p-2 pt-3"><ThemeToggle compact /><LogoutButton /></div>
               </div>
             </details>
           </div>

@@ -1,4 +1,4 @@
-.PHONY: backend-install backend-test backend-lint backend-format backend-run frontend-install frontend-lint frontend-typecheck frontend-build migrate monitor monitor-high monitor-normal monitor-low monitor-watchlist monitor-registry scheduled-smoke telegram-chat-id telegram-test telegram-webhook seed-cloudflare
+.PHONY: backend-install backend-test backend-lint backend-format backend-run frontend-install frontend-lint frontend-typecheck frontend-build migrate monitor monitor-high monitor-normal monitor-low monitor-watchlist monitor-registry scheduled-smoke telegram-webhook seed-cloudflare
 
 backend-install:
 	cd backend && python -m pip install -e '.[dev]'
@@ -50,12 +50,6 @@ monitor-registry:
 
 scheduled-smoke:
 	cd backend && python -m app.scripts.check_worker_config --require-telegram --require-remote-database
-
-telegram-chat-id:
-	cd backend && python -m app.scripts.telegram_chat_id
-
-telegram-test:
-	cd backend && python -m app.scripts.test_telegram
 
 telegram-webhook:
 	cd backend && python -m app.scripts.set_telegram_webhook

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.company import Company
 from app.models.enums import JobStatus
 from app.models.job import Job
+from app.models.job_source_observation import JobSourceObservation
 from app.schemas.job import NormalizedJob
 from app.services.fingerprint import build_job_fingerprint
 from app.services.text import normalize_for_match
@@ -54,6 +55,48 @@ def _wide_upgrade_candidate(incoming: NormalizedJob, jobs: list[Job]) -> Job | N
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _upsert_direct_observation(
+    session: Session,
+    *,
+    job: Job,
+    company: Company,
+    incoming: NormalizedJob,
+    observed_at: datetime,
+) -> None:
+    provider_key = f"{company.ats_provider.value}:{company.ats_identifier}"[:255]
+    external_id = (incoming.external_job_id or job.fingerprint)[:500]
+    observation = session.scalar(
+        select(JobSourceObservation).where(
+            JobSourceObservation.source_provider == provider_key,
+            JobSourceObservation.source_external_id == external_id,
+        )
+    )
+    if observation is None:
+        session.add(
+            JobSourceObservation(
+                job_id=job.id,
+                source_kind="DIRECT_ATS",
+                source_provider=provider_key,
+                source_external_id=external_id,
+                source_url=incoming.source_url,
+                apply_url=incoming.apply_url,
+                company_name=company.name,
+                posted_at=incoming.posted_at,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                verified=True,
+            )
+        )
+    else:
+        observation.job_id = job.id
+        observation.source_url = incoming.source_url
+        observation.apply_url = incoming.apply_url
+        observation.company_name = company.name
+        observation.posted_at = incoming.posted_at
+        observation.last_seen_at = observed_at
+        observation.verified = True
+
+
 def process_successful_snapshot(
     session: Session,
     *,
@@ -65,7 +108,7 @@ def process_successful_snapshot(
 ) -> JobProcessingResult:
     """Persist one complete successful source snapshot and advance lifecycle.
 
-    Phase 7C can upgrade an attached WIDE discovery row in place when the direct ATS
+    Broad-search rows can be upgraded in place when the direct company source
     later returns one unambiguous role with the same normalized title/location.
     """
     observed_at = now or datetime.now(timezone.utc)
@@ -164,6 +207,13 @@ def process_successful_snapshot(
                 updated += 1
                 updated_ids.append(current.id)
 
+        _upsert_direct_observation(
+            session,
+            job=current,
+            company=company,
+            incoming=incoming,
+            observed_at=observed_at,
+        )
         if current.external_job_id:
             by_external[current.external_job_id] = current
         by_fingerprint[current.fingerprint] = current

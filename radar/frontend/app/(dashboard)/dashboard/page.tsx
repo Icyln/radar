@@ -2,25 +2,41 @@ import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
 import { JobCard } from "@/components/job-card";
 import { PageHeader } from "@/components/page-header";
-import { formatDateTime } from "@/lib/format";
 import { serverRequest } from "@/lib/server-api";
 import type { DashboardSummary } from "@/types/api";
 
 export default async function DashboardPage() {
   const data = await serverRequest<DashboardSummary>("/api/v1/dashboard/summary");
   const stats = [
-    ["Active profiles", data.active_profiles],
-    ["Registry companies", data.monitored_companies],
-    ["Watched companies", data.watched_companies],
-    ["Jobs discovered today", data.jobs_discovered_today],
-    ["Wide jobs today", data.wide_jobs_today],
-    ["Direct ATS today", data.direct_jobs_today],
-    ["Matches today", data.matches_today],
-    ["Alerts sent today", data.alerts_sent_today]
-  ];
-  return <><PageHeader eyebrow="Overview" title="Your job radar" description="A concise view of matching activity and monitoring health." action={<Link href="/profiles" className="button-primary">New profile</Link>} />
-    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{stats.map(([label,value]) => <div key={label} className="panel p-4"><p className="text-xs text-zinc-500">{label}</p><p className="mt-2 text-2xl font-semibold tracking-tight text-zinc-50">{value}</p></div>)}</section>
-    <section className="mt-6 panel p-5"><div className="flex items-center justify-between gap-4"><div><p className="text-xs text-zinc-500">Last successful crawler run</p><p className="mt-1 text-sm font-medium text-zinc-200">{formatDateTime(data.last_successful_crawler_run)}</p></div><span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.5)]" aria-label="Monitoring healthy" /></div></section>
-    <section className="mt-8"><div className="mb-4 flex items-end justify-between"><div><h2 className="text-base font-semibold text-zinc-100">Recent matching jobs</h2><p className="mt-1 text-xs text-zinc-500">Newest jobs matched to any active profile.</p></div><Link href="/jobs" className="text-xs font-medium text-emerald-300 hover:text-emerald-200">View all →</Link></div>{data.recent_matching_jobs.length ? <div className="grid gap-4 xl:grid-cols-2">{data.recent_matching_jobs.map((job)=><JobCard key={job.id} job={job} compact />)}</div> : <EmptyState title="No matches yet" description="Create a monitoring profile, then Radar will surface matching direct ATS and Wide discovery jobs here." action={<Link href="/profiles" className="button-primary">Create profile</Link>} />}</section>
+    ["Active job alerts", data.active_profiles, "Your searches currently running"],
+    ["New matches today", data.matches_today, "Jobs matched to your alerts"],
+    ["Jobs found today", data.jobs_discovered_today, "New roles Radar found for you"],
+    ["Telegram alerts sent", data.alerts_sent_today, "Matching jobs delivered today"]
+  ] as const;
+
+  return <>
+    <PageHeader
+      eyebrow="Home"
+      title="Your job radar"
+      description="See what is new, then jump straight into the jobs worth reviewing."
+      action={<Link href="/profiles" className="button-primary">Create Job Alert</Link>}
+    />
+
+    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {stats.map(([label, value, helper]) => <div key={label} className="panel p-4"><p className="text-xs font-medium text-soft">{label}</p><p className="mt-2 text-2xl font-semibold tracking-tight text-main">{value}</p><p className="mt-1 text-[11px] leading-5 text-faint">{helper}</p></div>)}
+    </section>
+
+    <section className="mt-8">
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <div><h2 className="text-base font-semibold text-main">Recent matches</h2><p className="mt-1 text-xs text-soft">The newest jobs that fit one of your active alerts.</p></div>
+        <Link href="/jobs" className="text-xs font-semibold text-accent">View all jobs</Link>
+      </div>
+      {data.recent_matching_jobs.length ? <div className="grid gap-4 xl:grid-cols-2">{data.recent_matching_jobs.map((job) => <JobCard key={job.id} job={job} compact />)}</div> : <EmptyState title="No matches yet" description="Create a Job Alert and Radar will start organizing matching roles here." action={<Link href="/profiles" className="button-primary">Create Job Alert</Link>} />}
+    </section>
+
+    <section className="mt-6 grid gap-4 md:grid-cols-2">
+      <div className="panel-soft p-5"><h2 className="text-sm font-semibold text-main">Want to focus on specific companies?</h2><p className="mt-2 text-sm leading-6 text-soft">Follow companies you care about, or request a company that Radar does not know yet.</p><Link href="/companies" className="button-secondary mt-4">Manage companies</Link></div>
+      <div className="panel-soft p-5"><h2 className="text-sm font-semibold text-main">Want alerts in Telegram?</h2><p className="mt-2 text-sm leading-6 text-soft">Connect Telegram once and Radar can send new matching jobs directly to your chat.</p><Link href="/settings" className="button-secondary mt-4">Open settings</Link></div>
+    </section>
   </>;
 }

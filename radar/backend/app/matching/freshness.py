@@ -25,8 +25,8 @@ def _aware(value: datetime | None) -> datetime | None:
 def job_freshness_evidence(job: Job) -> FreshnessEvidence:
     """Return the safest timestamp Radar can use for freshness.
 
-    Provider publication time wins. A Phase-7 hiring signal may provide secondary
-    evidence for one unambiguously identified baseline job. If neither exists, Radar
+    Provider publication time wins. A fresh external hiring signal may provide
+    secondary evidence for one unambiguously identified baseline job. If neither exists, Radar
     may use first_seen_at only for jobs discovered after the company's baseline sync.
     Other baseline inventory remains UNKNOWN rather than being made to look freshly
     posted merely because Radar learned about the source today.

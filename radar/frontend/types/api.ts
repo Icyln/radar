@@ -5,6 +5,7 @@ export type ATSProvider = "GREENHOUSE" | "LEVER" | "ASHBY";
 export type MonitoringPriority = "HIGH" | "NORMAL" | "LOW";
 export type ProfileCoverageMode = "WATCHLIST" | "WIDE";
 export type JobSourceKind = "DIRECT_ATS" | "WIDE_DISCOVERY";
+export type AutomationState = "HEALTHY" | "DEGRADED" | "FAILED" | "STALE" | "RUNNING" | "UNKNOWN";
 
 export interface User {
   id: string;
@@ -70,6 +71,29 @@ export interface JobListItem {
   source_verified: boolean;
 }
 
+export interface MonitoringAutomationHealth {
+  state: AutomationState;
+  last_run_at: string | null;
+  trigger: string | null;
+  companies_selected: number;
+  companies_succeeded: number;
+  companies_failed: number;
+  notifications_sent: number;
+}
+
+export interface WideAutomationHealth {
+  state: AutomationState;
+  last_run_at: string | null;
+  trigger: string | null;
+  signals_seen: number;
+  signals_relevant: number;
+  jobs_new: number;
+  jobs_deduplicated: number;
+  provider_failures: number;
+  notifications_sent: number;
+  warnings: string[];
+}
+
 export interface DashboardSummary {
   active_profiles: number;
   monitored_companies: number;
@@ -80,6 +104,9 @@ export interface DashboardSummary {
   matches_today: number;
   alerts_sent_today: number;
   last_successful_crawler_run: string | null;
+  wide_jobs_unknown: number;
+  monitoring_automation: MonitoringAutomationHealth;
+  wide_search_automation: WideAutomationHealth;
   recent_matching_jobs: JobListItem[];
 }
 
@@ -225,6 +252,7 @@ export interface WideSearchRefreshResult {
   jobs_new: number;
   jobs_updated: number;
   jobs_existing: number;
+  jobs_deduplicated: number;
   matches_created: number;
   notifications_queued: number;
   notifications_sent: number;
@@ -233,4 +261,6 @@ export interface WideSearchRefreshResult {
   probe_candidates_staged: number;
   provider_failed: number;
   provider_warnings: string[];
+  provider_successes: string[];
+  provider_pages: number;
 }

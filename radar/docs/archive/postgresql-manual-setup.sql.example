@@ -1,0 +1,10 @@
+-- Radar local PostgreSQL setup example.
+-- Run these statements as the PostgreSQL administrator (usually user postgres).
+-- This password is public example data. Change it for shared/network-accessible machines.
+
+CREATE ROLE radar WITH LOGIN PASSWORD 'RadarLocal_ChangeMe_2026';
+CREATE DATABASE radar OWNER radar ENCODING 'UTF8';
+
+-- Radar application tables are NOT created here.
+-- After configuring DATABASE_URL, run from backend/:
+--   alembic upgrade head

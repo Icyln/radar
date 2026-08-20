@@ -81,7 +81,7 @@ def apply_discovery_signals_to_jobs(
     max_signal_age_days: int,
     now: datetime | None = None,
 ) -> list[uuid.UUID]:
-    """Attach fresh Phase-7 evidence to the one baseline job it can safely identify.
+    """Attach fresh external-signal evidence to one safely identified baseline job.
 
     Returns baseline job IDs that are eligible for the narrow initial-sync notification
     exception. Provider publication timestamps still remain the primary freshness source.

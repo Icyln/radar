@@ -2,7 +2,7 @@ name: Source Discovery
 
 on:
   schedule:
-    # Phase 7D: refresh active-hiring discovery every six hours and deliver new Wide matches.
+    # Refresh active-hiring discovery every six hours, record health, and deliver new broad-search matches.
     # The midnight run also refreshes Himalayas; its public JSON data refreshes daily.
     - cron: "23 0 * * *"
     - cron: "23 6 * * *"
@@ -20,7 +20,7 @@ concurrency:
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: backend
@@ -29,8 +29,13 @@ jobs:
       LOG_LEVEL: INFO
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      PHASE1_MAX_NOTIFICATIONS_PER_RUN: "50"
+      DISCOVERY_RUN_TRIGGER: github-actions
+      DISCOVERY_EXTERNAL_RUN_ID: ${{ github.run_id }}.${{ github.run_attempt }}
+      TELEGRAM_MAX_NOTIFICATIONS_PER_RUN: "100"
       DISCOVERY_SYSTEM_FEED_URLS: ${{ vars.DISCOVERY_SYSTEM_FEED_URLS }}
+      DISCOVERY_HIRING_ARBEITNOW_ENABLED: ${{ vars.DISCOVERY_HIRING_ARBEITNOW_ENABLED != 'false' }}
+      DISCOVERY_HIRING_ARBEITNOW_PAGES: "4"
+      DISCOVERY_HIRING_HIMALAYAS_PAGES: "3"
       # Himalayas documents a 24-hour data refresh; avoid redundant rate-limited queries.
       DISCOVERY_HIRING_HIMALAYAS_ENABLED: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '23 0 * * *' }}
 

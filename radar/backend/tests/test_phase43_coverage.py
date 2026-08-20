@@ -9,7 +9,6 @@ from app.models.enums import (
     ATSProvider,
     JobStatus,
     MonitoringPriority,
-    ProfileCoverageMode,
     WorkMode,
 )
 from app.models.job import Job

@@ -93,12 +93,29 @@ def list_jobs(
         )
         current: list[tuple[Job, str]] = []
         seen: set[uuid.UUID] = set()
-        for job, company_name, profile in session.execute(statement).all():
-            if job.id in seen:
-                continue
-            if profile_job_is_current_match(profile=profile, job=job, watch_pairs=watch_pairs):
-                seen.add(job.id)
-                current.append((job, company_name))
+        target_count = offset + limit
+        # Re-evaluate profile freshness/scope in bounded database batches. This keeps
+        # correctness after a user edits an alert without loading their entire match
+        # history into memory on every request.
+        batch_size = min(500, max(100, limit * 5))
+        db_offset = 0
+        while len(current) < target_count:
+            batch = session.execute(statement.limit(batch_size).offset(db_offset)).all()
+            if not batch:
+                break
+            db_offset += len(batch)
+            for job, company_name, profile in batch:
+                if job.id in seen:
+                    continue
+                if profile_job_is_current_match(
+                    profile=profile, job=job, watch_pairs=watch_pairs
+                ):
+                    seen.add(job.id)
+                    current.append((job, company_name))
+                    if len(current) >= target_count:
+                        break
+            if len(batch) < batch_size:
+                break
         rows = current[offset : offset + limit]
     else:
         desired = UserJobStateType.SAVED if view == "saved" else UserJobStateType.IGNORED

@@ -1,6 +1,7 @@
 pyproject.toml
 app/__init__.py
 app/main.py
+app/version.py
 app/api/__init__.py
 app/api/auth.py
 app/api/companies.py
@@ -21,6 +22,7 @@ app/core/__init__.py
 app/core/config.py
 app/core/http.py
 app/core/logging.py
+app/core/rate_limit.py
 app/core/security.py
 app/db/__init__.py
 app/db/base.py
@@ -39,12 +41,14 @@ app/matching/service.py
 app/models/__init__.py
 app/models/company.py
 app/models/crawler_log.py
+app/models/discovery_run.py
 app/models/discovery_target.py
 app/models/discovery_target_candidate.py
 app/models/enums.py
 app/models/job.py
 app/models/job_match.py
 app/models/job_profile.py
+app/models/job_source_observation.py
 app/models/mixins.py
 app/models/monitor_run.py
 app/models/notification.py
@@ -111,4 +115,7 @@ tests/test_phase5_monitoring.py
 tests/test_phase6_discovery.py
 tests/test_phase6c_freshness.py
 tests/test_phase7_active_hiring.py
+tests/test_phase7c_wide_jobs.py
+tests/test_phase7d_telegram.py
+tests/test_phase7e_hardening.py
 tests/test_telegram_scripts.py

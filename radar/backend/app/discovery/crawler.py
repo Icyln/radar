@@ -1,3 +1,4 @@
+import ipaddress
 import re
 from collections import deque
 from dataclasses import dataclass
@@ -63,6 +64,32 @@ class DiscoveryScanResult:
     title_hint: str | None
 
 
+def _validate_connected_peer(response: httpx.Response) -> None:
+    """Reject a non-public connected peer when the transport exposes it.
+
+    ensure_public_url() validates DNS before the request. Checking the connected
+    peer as well closes the common DNS-rebinding/TOCTOU gap on standard httpx
+    transports, while remaining compatible with test/custom transports that do not
+    expose socket metadata.
+    """
+    stream = response.extensions.get("network_stream")
+    if stream is None or not hasattr(stream, "get_extra_info"):
+        return
+    try:
+        peer = stream.get_extra_info("server_addr")
+    except Exception:
+        return
+    if not peer:
+        return
+    address = peer[0] if isinstance(peer, tuple) else peer
+    try:
+        ip = ipaddress.ip_address(str(address))
+    except ValueError:
+        return
+    if not ip.is_global:
+        raise UnsafeDiscoveryUrl("discovery connection reached a non-public network address")
+
+
 class SafeHtmlFetcher:
     def __init__(
         self,
@@ -70,9 +97,11 @@ class SafeHtmlFetcher:
         connect_timeout: float,
         read_timeout: float,
         user_agent: str,
+        max_bytes: int = 2_000_000,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._owns_client = client is None
+        self.max_bytes = max_bytes
         timeout = httpx.Timeout(read_timeout, connect=connect_timeout)
         self.client = client or httpx.AsyncClient(
             timeout=timeout,
@@ -90,22 +119,37 @@ class SafeHtmlFetcher:
     async def fetch(self, url: str, *, max_redirects: int = 4) -> FetchedPage:
         current = await ensure_public_url(url)
         for _ in range(max_redirects + 1):
-            response = await self.client.get(current)
-            if response.status_code in {301, 302, 303, 307, 308}:
-                location = response.headers.get("location")
-                if not location:
-                    raise RuntimeError("discovery page redirected without a Location header")
-                current = await ensure_public_url(urljoin(current, location))
-                continue
-            if response.status_code >= 400:
-                raise RuntimeError(f"discovery page returned HTTP {response.status_code}")
-            content_type = response.headers.get("content-type", "").casefold()
-            if "html" not in content_type and "text" not in content_type:
-                raise RuntimeError("discovery target did not return HTML")
-            text = response.text
-            parser = _HtmlLinks()
-            parser.feed(text)
-            return FetchedPage(current, text, parser.title, parser.links)
+            async with self.client.stream("GET", current) as response:
+                _validate_connected_peer(response)
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise RuntimeError("discovery page redirected without a Location header")
+                    current = await ensure_public_url(urljoin(current, location))
+                    continue
+                if response.status_code >= 400:
+                    raise RuntimeError(f"discovery page returned HTTP {response.status_code}")
+                content_type = response.headers.get("content-type", "").casefold()
+                if "html" not in content_type and "text" not in content_type:
+                    raise RuntimeError("discovery target did not return HTML")
+                raw_length = response.headers.get("content-length")
+                if raw_length:
+                    try:
+                        if int(raw_length) > self.max_bytes:
+                            raise RuntimeError("discovery page is larger than the allowed response limit")
+                    except ValueError:
+                        pass
+
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > self.max_bytes:
+                        raise RuntimeError("discovery page is larger than the allowed response limit")
+                encoding = response.encoding or "utf-8"
+                text = bytes(body).decode(encoding, errors="replace")
+                parser = _HtmlLinks()
+                parser.feed(text)
+                return FetchedPage(current, text, parser.title, parser.links)
         raise RuntimeError("discovery page redirected too many times")
 
 

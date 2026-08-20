@@ -23,11 +23,7 @@ from app.schemas.company import CompanyTarget
 from app.services.discovery_signals import apply_discovery_signals_to_jobs
 from app.services.job_processor import process_successful_snapshot
 from app.services.locking import release_company_lock, try_company_lock
-from app.services.notifications import (
-    deliver_pending_notifications,
-    enqueue_match_notifications,
-    enqueue_phase1_notifications,
-)
+from app.services.notifications import deliver_pending_notifications, enqueue_match_notifications
 
 logger = logging.getLogger(__name__)
 CollectorFactory = Callable[[ATSProvider, Settings], BaseCollector]
@@ -382,8 +378,8 @@ class MonitorService:
                         session, job_ids=result.updated_job_ids
                     )
                     matches_created = new_match_result.created + updated_match_result.created
-                    # Initial source sync normally establishes a silent baseline. Phase 7 has
-                    # one narrow exception: a fresh external hiring signal may identify one
+                    # Initial source sync normally establishes a silent baseline. A fresh
+                    # external hiring signal is the narrow exception: it may identify the
                     # specific baseline role that caused the source to be discovered.
                     alert_match_ids = new_match_result.match_ids
                     if initial_sync:
@@ -401,15 +397,6 @@ class MonitorService:
                     enqueue_match_notifications(
                         session,
                         match_ids=alert_match_ids,
-                        crawler_log_id=crawler_log.id,
-                    )
-                    # Retain the Phase-1 single-recipient path for local smoke testing.
-                    enqueue_phase1_notifications(
-                        session,
-                        company=company,
-                        new_job_ids=result.new_job_ids,
-                        settings=self.settings,
-                        initial_sync=initial_sync,
                         crawler_log_id=crawler_log.id,
                     )
                     company.last_successful_check_at = completed

@@ -1,6 +1,6 @@
 alembic<2,>=1.18
 argon2-cffi<26,>=23.1
-fastapi<1,>=0.128
+fastapi<0.141,>=0.133
 httpx<1,>=0.28
 PyJWT<3,>=2.10
 psycopg[binary]<4,>=3.2

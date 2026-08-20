@@ -86,12 +86,6 @@ _URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
 def _direct_ats_sources(value: object) -> tuple[DetectedSource, ...]:
-    """Extract exact supported ATS URLs embedded in a public job payload.
-
-    Public indexes often carry the employer's original description. When that
-    description contains a direct Greenhouse/Lever/Ashby URL, it is stronger evidence
-    than guessing a tenant identifier from the company name.
-    """
     if not isinstance(value, str) or not value:
         return ()
     sources: dict[tuple[ATSProvider, str], DetectedSource] = {}
@@ -103,7 +97,6 @@ def _direct_ats_sources(value: object) -> tuple[DetectedSource, ...]:
 
 
 def _provider_hints(value: object) -> tuple[ATSProvider, ...]:
-    """Infer supported ATS families from otherwise non-discoverable payload URLs."""
     if not isinstance(value, str) or not value:
         return ()
     lowered = value.casefold()
@@ -129,13 +122,7 @@ def _company_slug_from_arbeitnow_url(url: str) -> str | None:
 
 
 class PublicHiringSignalProvider:
-    """Bounded, no-key discovery seeds from public job indexes.
-
-    Phase 7C uses these feeds for two purposes: immediate WIDE job discovery and
-    company/ATS resolution. Feed jobs are stored with explicit provenance; a verified
-    Greenhouse/Lever/Ashby source can later upgrade the same opportunity. Aggregator
-    application pages remain provenance, not HTML crawl targets.
-    """
+    """Bounded no-key discovery with per-source failure isolation and deeper pagination."""
 
     ARBEITNOW_DE = "https://www.arbeitnow.com/api/job-board-api"
     ARBEITNOW_UK = "https://www.arbeitnow.co.uk/api/job-board-api"
@@ -150,6 +137,10 @@ class PublicHiringSignalProvider:
         self.settings = settings
         self._owns_client = client is None
         self.failed_sources: list[str] = []
+        self.failed_provider_names: set[str] = set()
+        self.successful_sources: set[str] = set()
+        self.source_counts: dict[str, int] = {}
+        self.pages_fetched: dict[str, int] = {}
         self.client = client or RetryingHttpClient(
             connect_timeout=settings.monitor_http_connect_timeout_seconds,
             read_timeout=settings.monitor_http_read_timeout_seconds,
@@ -161,16 +152,22 @@ class PublicHiringSignalProvider:
         if self._owns_client:
             await self.client.close()
 
+    def _record_failure(self, source: str, exc: Exception, *, context: str | None = None) -> None:
+        self.failed_provider_names.add(source)
+        detail = f"{exc.__class__.__name__}: {str(exc) or repr(exc)}"
+        message = f"{source}{f' {context}' if context else ''}: {detail}"[:500]
+        if message not in self.failed_sources and len(self.failed_sources) < 25:
+            self.failed_sources.append(message)
+        logger.warning("hiring signal source unavailable: %s", message)
+
+    def _mark_success(self, source: str, *, count: int, pages: int) -> None:
+        self.successful_sources.add(source)
+        self.source_counts[source] = self.source_counts.get(source, 0) + count
+        self.pages_fetched[source] = self.pages_fetched.get(source, 0) + pages
+
     async def _get_json_bounded(
         self, url: str, *, params: dict[str, Any] | None = None
     ) -> Any:
-        """Bound the full fetch, not just each socket read.
-
-        httpx read timeouts reset whenever another response chunk arrives. Large or
-        slowly streamed public feeds can therefore keep a discovery run occupied for
-        much longer than MONITOR_HTTP_READ_TIMEOUT_SECONDS. Phase 7 discovery is
-        best-effort, so cap the entire provider request and move on when it expires.
-        """
         return await asyncio.wait_for(
             self.client.get_json(url, params=params),
             timeout=self.settings.discovery_hiring_request_total_timeout_seconds,
@@ -206,13 +203,19 @@ class PublicHiringSignalProvider:
         self, *, endpoint: str, source: str
     ) -> list[HiringSignal]:
         results: list[HiringSignal] = []
+        pages = 0
         for page in range(1, self.settings.discovery_hiring_arbeitnow_pages + 1):
-            payload = await self._get_json_bounded(endpoint, params={"page": page})
+            try:
+                payload = await self._get_json_bounded(endpoint, params={"page": page})
+            except Exception as exc:
+                self._record_failure(source, exc, context=f"page {page}")
+                break
             if not isinstance(payload, dict):
                 break
             data = payload.get("data")
             if not isinstance(data, list):
                 break
+            pages += 1
             for item in data:
                 signal = self._arbeitnow_signal(item, source=source)
                 if signal is not None:
@@ -220,6 +223,8 @@ class PublicHiringSignalProvider:
             links = payload.get("links")
             if not isinstance(links, dict) or not links.get("next"):
                 break
+        if pages:
+            self._mark_success(source, count=len(results), pages=pages)
         return results
 
     @staticmethod
@@ -264,29 +269,33 @@ class PublicHiringSignalProvider:
 
     async def _fetch_himalayas(self, search_terms: list[str]) -> list[HiringSignal]:
         results: list[HiringSignal] = []
+        pages = 0
         for term in search_terms[: self.settings.discovery_hiring_max_queries]:
-            try:
-                payload: Any = await self._get_json_bounded(
-                    self.HIMALAYAS_SEARCH,
-                    params={"q": term, "sort": "recent", "page": 1},
-                )
-            except Exception as exc:
-                message = f"himalayas: {exc.__class__.__name__}: {str(exc) or repr(exc)}"
-                if message not in self.failed_sources:
-                    self.failed_sources.append(message[:500])
-                logger.warning("hiring signal source unavailable: %s", message[:500])
-                continue
-            jobs: object
-            if isinstance(payload, dict):
-                jobs = payload.get("jobs") or payload.get("data") or payload.get("results") or []
-            else:
-                jobs = payload
-            if not isinstance(jobs, list):
-                continue
-            for item in jobs:
-                signal = self._himalayas_signal(item)
-                if signal is not None:
-                    results.append(signal)
+            for page in range(1, self.settings.discovery_hiring_himalayas_pages + 1):
+                try:
+                    payload: Any = await self._get_json_bounded(
+                        self.HIMALAYAS_SEARCH,
+                        params={"q": term, "sort": "recent", "page": page},
+                    )
+                except Exception as exc:
+                    self._record_failure("himalayas", exc, context=f"{term!r} page {page}")
+                    break
+                jobs: object
+                if isinstance(payload, dict):
+                    jobs = payload.get("jobs") or payload.get("data") or payload.get("results") or []
+                else:
+                    jobs = payload
+                if not isinstance(jobs, list):
+                    break
+                pages += 1
+                if not jobs:
+                    break
+                for item in jobs:
+                    signal = self._himalayas_signal(item)
+                    if signal is not None:
+                        results.append(signal)
+        if pages:
+            self._mark_success("himalayas", count=len(results), pages=pages)
         return results
 
     async def fetch(self, *, search_terms: list[str]) -> list[HiringSignal]:
@@ -295,19 +304,11 @@ class PublicHiringSignalProvider:
 
         results: list[HiringSignal] = []
         if self.settings.discovery_hiring_arbeitnow_enabled:
-            endpoints = (
+            for endpoint, source in (
                 (self.ARBEITNOW_DE, "arbeitnow-eu"),
                 (self.ARBEITNOW_UK, "arbeitnow-uk"),
-            )
-            for endpoint, source in endpoints:
-                try:
-                    results.extend(
-                        await self._fetch_arbeitnow_endpoint(endpoint=endpoint, source=source)
-                    )
-                except Exception as exc:
-                    message = f"{source}: {exc.__class__.__name__}: {str(exc) or repr(exc)}"
-                    self.failed_sources.append(message[:500])
-                    logger.warning("hiring signal source unavailable: %s", message[:500])
+            ):
+                results.extend(await self._fetch_arbeitnow_endpoint(endpoint=endpoint, source=source))
 
         if self.settings.discovery_hiring_himalayas_enabled:
             results.extend(await self._fetch_himalayas(search_terms))

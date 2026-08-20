@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.discovery.hiring import HiringSignal
-from app.models.enums import ATSProvider, DiscoveryCandidateStatus, DiscoveryTargetOrigin, DiscoveryTargetStatus, MonitoringPriority, ProfileCoverageMode, WorkMode
+from app.models.enums import ATSProvider, DiscoveryCandidateStatus, DiscoveryTargetOrigin, DiscoveryTargetStatus, ProfileCoverageMode, WorkMode
 from app.models.company import Company
 from app.models.discovery_target import DiscoveryTarget
 from app.models.discovery_target_candidate import DiscoveryTargetCandidate

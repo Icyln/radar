@@ -11,7 +11,7 @@ from app.models.enums import DiscoveryTargetOrigin, DiscoveryTargetStatus
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Bulk-import public company/career URLs for Phase 6 discovery"
+        description="Bulk-import public company/career URLs for source discovery"
     )
     parser.add_argument("--file", required=True, help="CSV containing url and optional company_name")
     args = parser.parse_args()

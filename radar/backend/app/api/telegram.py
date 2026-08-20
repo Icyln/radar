@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import current_user
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import enforce_rate_limit
 from app.db.session import get_db
 from app.models.company import Company
 from app.models.job import Job
@@ -92,10 +93,18 @@ def delivery_status(
 
 @router.post("/test", response_model=TelegramTestResponse)
 async def test_alert(
+    request: Request,
     user: User = Depends(current_user),
     session: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> TelegramTestResponse:
+    enforce_rate_limit(
+        request,
+        bucket="telegram-test",
+        identity=str(user.id),
+        limit=settings.telegram_test_rate_limit,
+        window_seconds=settings.telegram_test_rate_window_seconds,
+    )
     connection = session.scalar(
         select(TelegramConnection).where(
             TelegramConnection.user_id == user.id,
@@ -124,6 +133,10 @@ async def test_alert(
         preview = "🧪 RADAR ALERT PREVIEW — this is not a new alert\n\n" + format_job_message(
             job, resolved_name
         )
+
+    # Nothing below needs the request-scoped database connection. Release it before
+    # waiting on Telegram so a slow network call cannot occupy a Supabase connection.
+    session.close()
 
     client = _client(settings)
     try:

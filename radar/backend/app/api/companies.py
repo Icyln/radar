@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,10 +23,21 @@ router = APIRouter(prefix="/api/v1/companies", tags=["companies"])
 
 @router.get("", response_model=list[CompanyRead])
 def list_companies(
-    _: User = Depends(current_user), session: Session = Depends(get_db)
+    q: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: User = Depends(current_user),
+    session: Session = Depends(get_db),
 ) -> list[Company]:
-    return list(session.scalars(select(Company).order_by(Company.name.asc())))
-
+    statement = select(Company)
+    search = (q or "").strip()
+    if search:
+        statement = statement.where(Company.name.ilike(f"%{search}%"))
+    return list(
+        session.scalars(
+            statement.order_by(Company.name.asc()).limit(limit).offset(offset)
+        )
+    )
 
 
 
