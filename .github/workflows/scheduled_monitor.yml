@@ -29,7 +29,7 @@ jobs:
       MONITOR_RUN_TRIGGER: github-actions
       MONITOR_EXTERNAL_RUN_ID: ${{ github.run_id }}.${{ github.run_attempt }}
       MONITOR_MAX_CONCURRENCY: "3"
-      PHASE1_MAX_NOTIFICATIONS_PER_RUN: "50"
+      TELEGRAM_MAX_NOTIFICATIONS_PER_RUN: "100"
 
     steps:
       - name: Check out repository
